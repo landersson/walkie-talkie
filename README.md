@@ -110,6 +110,14 @@ npm start
 
 The Hub starts on `http://localhost:9559`. Open this URL in your browser to see the ON-AIR dashboard.
 
+By default the Hub only listens on `127.0.0.1`. To make it reachable from other machines, set `HOST` (and optionally `PORT`):
+
+```bash
+HOST=0.0.0.0 npm start
+```
+
+Then point clients at the Hub's address, e.g. `HUB_URL=http://<hub-ip>:9559` for the MCP server and `WALKIE_TALKIE_HUB_URL=http://<hub-ip>:9559` for the Slack bot. Traffic is plain HTTP, so only do this on a trusted network.
+
 ### 4. Connect Claude Code
 
 **Plugin (recommended)**:
@@ -190,7 +198,7 @@ Open another session with a different name to start chatting. You can mix Claude
 
 ## 🖥️ Dashboard (ON-AIR Screen)
 
-Open `http://localhost:9559` in your browser to:
+Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE_ADMIN_TOKEN` (it is remembered in the browser's local storage) to:
 
 - See all connected users and messages in real time
 - Kick individual users or all agents at once

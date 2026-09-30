@@ -1,4 +1,4 @@
-export function getDashboardHTML(adminToken: string): string {
+export function getDashboardHTML(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -917,6 +917,18 @@ export function getDashboardHTML(adminToken: string): string {
       </div>
     </div>
   </div>
+  <div class="dialog-overlay" id="login-dialog" style="display:none">
+    <div class="dialog">
+      <h2>Admin login</h2>
+      <label>Admin token
+        <input type="password" id="login-token" placeholder="WALKIE_TALKIE_ADMIN_TOKEN" autocomplete="current-password">
+        <span id="login-error" style="color:var(--red);font-size:11px;display:none"></span>
+      </label>
+      <div class="dialog-buttons">
+        <button class="btn-save" id="login-submit">Log in</button>
+      </div>
+    </div>
+  </div>
   <div class="dialog-overlay" id="agent-dialog" style="display:none">
     <div class="dialog">
       <h2 id="agent-dialog-title">New Agent</h2>
@@ -939,8 +951,9 @@ export function getDashboardHTML(adminToken: string): string {
     </div>
   </div>
   <script>
-    const ADMIN_TOKEN = "${adminToken}";
-    const adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + ADMIN_TOKEN };
+    const TOKEN_STORAGE_KEY = "walkie-talkie-admin-token";
+    let ADMIN_TOKEN = "";
+    let adminHeaders = {};
     const messagesEl = document.getElementById("messages");
     const userListEl = document.getElementById("user-list");
     const channelListEl = document.getElementById("channel-list");
@@ -1549,183 +1562,243 @@ export function getDashboardHTML(adminToken: string): string {
       }).catch(() => {});
     }
 
-    // Fetch initial data
-    fetch("/users").then(r => r.json()).then(data => {
-      for (const u of data.users) users.set(u.name, u.online);
-      renderUsers();
-    }).catch(() => {});
-
-    fetch("/channels").then(r => r.json()).then(data => {
-      for (const ch of data.channels) {
-        channels.set(ch.name, { memberCount: ch.memberCount, createdBy: ch.createdBy, members: ch.members || [] });
-      }
-      renderChannels();
-      updateChannelHeader();
-    }).catch(() => {});
-
-    // Load agent configs
-    refreshAgentConfigs();
-
-    // Load unread counts
-    fetch("/admin-unread-counts", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
-      .then(r => r.json())
-      .then(data => {
-        if (data.counts) {
-          for (const [ch, cnt] of Object.entries(data.counts)) {
-            unreadCounts[ch] = cnt;
-          }
-          renderChannels();
-        }
+    function startDashboard() {
+      // Fetch initial data
+      fetch("/users").then(r => r.json()).then(data => {
+        for (const u of data.users) users.set(u.name, u.online);
+        renderUsers();
       }).catch(() => {});
 
-    // Load message history from DB
-    fetch("/admin-channel-history", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
-      .then(r => r.json())
-      .then(data => {
-        if (data.messages && data.messages.length > 0) {
-          clearEmpty();
-          for (const msg of data.messages) {
-            const cls = msg.from === "operator" ? "message operator" : "message";
-            const channelTag = '<span class="channel-tag">' + (msg.channel || "#all") + '</span>';
-            addMessage(
-              '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
-              channelTag +
-              '<span class="from">' + msg.from + '</span> ' +
-              '<span class="to">&rarr; ' + msg.to + '</span>' +
-              '<div class="content">' + msg.content.replace(/</g, "&lt;") + '</div>' +
-              renderImageTag(msg.image),
-              cls,
-              msg.channel || "#all"
-            );
-          }
+      fetch("/channels").then(r => r.json()).then(data => {
+        for (const ch of data.channels) {
+          channels.set(ch.name, { memberCount: ch.memberCount, createdBy: ch.createdBy, members: ch.members || [] });
         }
-        // Mark #all as read after loading history
-        markChannelRead("#all");
+        renderChannels();
+        updateChannelHeader();
       }).catch(() => {});
 
-    const es = new EventSource("/events");
+      // Load agent configs
+      refreshAgentConfigs();
 
-    es.onmessage = (e) => {
-      const ev = JSON.parse(e.data);
+      // Load unread counts
+      fetch("/admin-unread-counts", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
+        .then(r => r.json())
+        .then(data => {
+          if (data.counts) {
+            for (const [ch, cnt] of Object.entries(data.counts)) {
+              unreadCounts[ch] = cnt;
+            }
+            renderChannels();
+          }
+        }).catch(() => {});
 
-      if (ev.type === "status") {
-        if (users.has(ev.name)) {
-          users.set(ev.name, ev.online);
+      // Load message history from DB
+      fetch("/admin-channel-history", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
+        .then(r => r.json())
+        .then(data => {
+          if (data.messages && data.messages.length > 0) {
+            clearEmpty();
+            for (const msg of data.messages) {
+              const cls = msg.from === "operator" ? "message operator" : "message";
+              const channelTag = '<span class="channel-tag">' + (msg.channel || "#all") + '</span>';
+              addMessage(
+                '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
+                channelTag +
+                '<span class="from">' + msg.from + '</span> ' +
+                '<span class="to">&rarr; ' + msg.to + '</span>' +
+                '<div class="content">' + msg.content.replace(/</g, "&lt;") + '</div>' +
+                renderImageTag(msg.image),
+                cls,
+                msg.channel || "#all"
+              );
+            }
+          }
+          // Mark #all as read after loading history
+          markChannelRead("#all");
+        }).catch(() => {});
+
+      const es = new EventSource("/events?token=" + encodeURIComponent(ADMIN_TOKEN));
+
+      es.onmessage = (e) => {
+        const ev = JSON.parse(e.data);
+
+        if (ev.type === "status") {
+          if (users.has(ev.name)) {
+            users.set(ev.name, ev.online);
+            renderUsers();
+            renderAgents();
+          }
+        } else if (ev.type === "join") {
+          users.set(ev.name, true);
           renderUsers();
           renderAgents();
+          refreshChannels();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            '<strong>' + ev.name + '</strong> joined the channel',
+            "system",
+            null
+          );
+        } else if (ev.type === "leave") {
+          users.delete(ev.name);
+          renderUsers();
+          renderAgents();
+          refreshChannels();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            '<strong>' + ev.name + '</strong> left the channel',
+            "system leave",
+            null
+          );
+        } else if (ev.type === "message") {
+          // Clear typing and pending-reply state when user sends a real message
+          clearPendingReply(ev.from);
+          if (users.has(ev.from)) users.set(ev.from, true);
+          const existingTimer = typingUsers.get(ev.from);
+          if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
+          const cls = ev.from === "operator" ? "message operator" : "message";
+          const channelTag = '<span class="channel-tag">' + (ev.channel || "#all") + '</span>';
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            channelTag +
+            '<span class="from">' + ev.from + '</span> ' +
+            '<span class="to">&rarr; ' + ev.to + '</span>' +
+            '<div class="content">' + ev.content.replace(/</g, "&lt;") + '</div>' +
+            renderImageTag(ev.image),
+            cls,
+            ev.channel || "#all"
+          );
+          // Unread tracking
+          const msgChannel = ev.channel || "#all";
+          if (msgChannel === selectedChannel) {
+            markChannelRead(msgChannel);
+          } else {
+            unreadCounts[msgChannel] = (unreadCounts[msgChannel] || 0) + 1;
+            renderChannels();
+          }
+        } else if (ev.type === "channel_create") {
+          refreshChannels();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            'Channel <strong>' + ev.name + '</strong> created',
+            "system channel-event",
+            null
+          );
+        } else if (ev.type === "channel_join") {
+          refreshChannels();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            '<strong>' + ev.userName + '</strong> joined <strong>' + ev.channel + '</strong>',
+            "system channel-event",
+            ev.channel
+          );
+        } else if (ev.type === "channel_leave") {
+          refreshChannels();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            '<strong>' + ev.userName + '</strong> left <strong>' + ev.channel + '</strong>',
+            "system channel-event leave",
+            ev.channel
+          );
+        } else if (ev.type === "read_update") {
+          if (ev.userName === "operator") {
+            delete unreadCounts[ev.channel];
+            renderChannels();
+          }
+        } else if (ev.type === "channel_delete") {
+          if (selectedChannel === ev.name) selectedChannel = "#all";
+          delete unreadCounts[ev.name];
+          refreshChannels();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            'Channel <strong>' + ev.name + '</strong> deleted',
+            "system channel-event leave",
+            null
+          );
+        } else if (ev.type === "agent_config_create" || ev.type === "agent_config_update") {
+          refreshAgentConfigs();
+        } else if (ev.type === "agent_config_delete") {
+          agentConfigs.delete(ev.id);
+          renderAgents();
+        } else if (ev.type === "typing") {
+          clearPendingReply(ev.name);
+          if (users.has(ev.name)) users.set(ev.name, true);
+          const prev = typingUsers.get(ev.name);
+          if (prev) clearTimeout(prev.timeoutId);
+          typingUsers.set(ev.name, { timeoutId: setTimeout(() => { typingUsers.delete(ev.name); renderUsers(); renderTypingBar(); }, 60000), channel: ev.channel || "#all" });
+          renderUsers();
+          renderTypingBar();
         }
-      } else if (ev.type === "join") {
-        users.set(ev.name, true);
-        renderUsers();
-        renderAgents();
-        refreshChannels();
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.name + '</strong> joined the channel',
-          "system",
-          null
-        );
-      } else if (ev.type === "leave") {
-        users.delete(ev.name);
-        renderUsers();
-        renderAgents();
-        refreshChannels();
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.name + '</strong> left the channel',
-          "system leave",
-          null
-        );
-      } else if (ev.type === "message") {
-        // Clear typing and pending-reply state when user sends a real message
-        clearPendingReply(ev.from);
-        if (users.has(ev.from)) users.set(ev.from, true);
-        const existingTimer = typingUsers.get(ev.from);
-        if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
-        const cls = ev.from === "operator" ? "message operator" : "message";
-        const channelTag = '<span class="channel-tag">' + (ev.channel || "#all") + '</span>';
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          channelTag +
-          '<span class="from">' + ev.from + '</span> ' +
-          '<span class="to">&rarr; ' + ev.to + '</span>' +
-          '<div class="content">' + ev.content.replace(/</g, "&lt;") + '</div>' +
-          renderImageTag(ev.image),
-          cls,
-          ev.channel || "#all"
-        );
-        // Unread tracking
-        const msgChannel = ev.channel || "#all";
-        if (msgChannel === selectedChannel) {
-          markChannelRead(msgChannel);
-        } else {
-          unreadCounts[msgChannel] = (unreadCounts[msgChannel] || 0) + 1;
-          renderChannels();
-        }
-      } else if (ev.type === "channel_create") {
-        refreshChannels();
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          'Channel <strong>' + ev.name + '</strong> created',
-          "system channel-event",
-          null
-        );
-      } else if (ev.type === "channel_join") {
-        refreshChannels();
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.userName + '</strong> joined <strong>' + ev.channel + '</strong>',
-          "system channel-event",
-          ev.channel
-        );
-      } else if (ev.type === "channel_leave") {
-        refreshChannels();
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.userName + '</strong> left <strong>' + ev.channel + '</strong>',
-          "system channel-event leave",
-          ev.channel
-        );
-      } else if (ev.type === "read_update") {
-        if (ev.userName === "operator") {
-          delete unreadCounts[ev.channel];
-          renderChannels();
-        }
-      } else if (ev.type === "channel_delete") {
-        if (selectedChannel === ev.name) selectedChannel = "#all";
-        delete unreadCounts[ev.name];
-        refreshChannels();
-        addMessage(
-          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          'Channel <strong>' + ev.name + '</strong> deleted',
-          "system channel-event leave",
-          null
-        );
-      } else if (ev.type === "agent_config_create" || ev.type === "agent_config_update") {
-        refreshAgentConfigs();
-      } else if (ev.type === "agent_config_delete") {
-        agentConfigs.delete(ev.id);
-        renderAgents();
-      } else if (ev.type === "typing") {
-        clearPendingReply(ev.name);
-        if (users.has(ev.name)) users.set(ev.name, true);
-        const prev = typingUsers.get(ev.name);
-        if (prev) clearTimeout(prev.timeoutId);
-        typingUsers.set(ev.name, { timeoutId: setTimeout(() => { typingUsers.delete(ev.name); renderUsers(); renderTypingBar(); }, 60000), channel: ev.channel || "#all" });
-        renderUsers();
-        renderTypingBar();
-      }
-    };
+      };
 
-    es.onopen = () => {
-      statusEl.textContent = "connected";
-      statusEl.className = "";
-    };
+      es.onopen = () => {
+        statusEl.textContent = "connected";
+        statusEl.className = "";
+      };
 
-    es.onerror = () => {
-      statusEl.textContent = "disconnected";
-      statusEl.className = "disconnected";
-    };
+      es.onerror = () => {
+        statusEl.textContent = "disconnected";
+        statusEl.className = "disconnected";
+      };
+    }
+
+    // Admin login: the token is never embedded in the page, so ask for it and validate against the Hub
+    const loginDialogEl = document.getElementById("login-dialog");
+    const loginInputEl = document.getElementById("login-token");
+    const loginErrorEl = document.getElementById("login-error");
+
+    function readStoredToken() {
+      try { return localStorage.getItem(TOKEN_STORAGE_KEY) || ""; } catch { return ""; }
+    }
+
+    function storeToken(token) {
+      try {
+        if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+        else localStorage.removeItem(TOKEN_STORAGE_KEY);
+      } catch {}
+    }
+
+    function tryLogin(token) {
+      return fetch("/admin-unread-counts", { headers: { "Authorization": "Bearer " + token } })
+        .then(r => {
+          if (!r.ok) return false;
+          ADMIN_TOKEN = token;
+          adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + token };
+          storeToken(token);
+          loginDialogEl.style.display = "none";
+          startDashboard();
+          return true;
+        });
+    }
+
+    function showLogin(error) {
+      loginErrorEl.textContent = error || "";
+      loginErrorEl.style.display = error ? "" : "none";
+      loginDialogEl.style.display = "flex";
+      loginInputEl.focus();
+    }
+
+    function submitLogin() {
+      const token = loginInputEl.value.trim();
+      if (!token) return;
+      tryLogin(token)
+        .then(ok => { if (!ok) showLogin("Invalid admin token"); })
+        .catch(() => showLogin("Could not reach the Hub"));
+    }
+
+    document.getElementById("login-submit").onclick = submitLogin;
+    loginInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
+
+    const storedToken = readStoredToken();
+    if (storedToken) {
+      tryLogin(storedToken)
+        .then(ok => {
+          if (!ok) { storeToken(""); showLogin("Stored admin token was rejected"); }
+        })
+        .catch(() => showLogin("Could not reach the Hub"));
+    } else {
+      showLogin();
+    }
   </script>
 </body>
 </html>`;
