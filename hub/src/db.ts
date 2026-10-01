@@ -178,7 +178,9 @@ function parseMessageRow(row: Record<string, unknown>): Message {
 export function dbGetChannelMessages(channel: string, limit = 50): Message[] {
   const rows = db
     .prepare(
-      `SELECT id, "from", "to", content, channel, timestamp, image FROM messages WHERE channel = ? ORDER BY timestamp ASC LIMIT ?`,
+      `SELECT * FROM (
+        SELECT id, "from", "to", content, channel, timestamp, image FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?
+      ) ORDER BY timestamp ASC`,
     )
     .all(channel, limit) as Record<string, unknown>[];
   return rows.map(parseMessageRow);
@@ -186,7 +188,11 @@ export function dbGetChannelMessages(channel: string, limit = 50): Message[] {
 
 export function dbGetRecentMessages(limit = 200): Message[] {
   const rows = db
-    .prepare(`SELECT id, "from", "to", content, channel, timestamp, image FROM messages ORDER BY timestamp ASC LIMIT ?`)
+    .prepare(
+      `SELECT * FROM (
+        SELECT id, "from", "to", content, channel, timestamp, image FROM messages ORDER BY timestamp DESC LIMIT ?
+      ) ORDER BY timestamp ASC`,
+    )
     .all(limit) as Record<string, unknown>[];
   return rows.map(parseMessageRow);
 }

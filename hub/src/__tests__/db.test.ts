@@ -141,6 +141,16 @@ describe("messages", () => {
     expect(dbGetChannelMessages("#all", 3)).toHaveLength(3);
   });
 
+  it("should return the newest messages in chronological order when limited", () => {
+    dbCreateChannel("#other", "alice");
+    for (let i = 0; i < 5; i++) {
+      dbSaveMessage(makeMsg({ id: `all-${i}`, timestamp: i }));
+      dbSaveMessage(makeMsg({ id: `other-${i}`, channel: "#other", timestamp: 100 + i }));
+    }
+    expect(dbGetChannelMessages("#all", 3).map((m) => m.id)).toEqual(["all-2", "all-3", "all-4"]);
+    expect(dbGetRecentMessages(3).map((m) => m.id)).toEqual(["other-2", "other-3", "other-4"]);
+  });
+
   it("should prune #all channel beyond 200 messages", () => {
     for (let i = 0; i < 210; i++) {
       dbSaveMessage(
