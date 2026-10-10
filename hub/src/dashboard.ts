@@ -549,8 +549,16 @@ export function getDashboardHTML(): string {
   }
 
   /* Messages */
+  .messages-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
   #messages {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 16px 24px;
     display: flex;
@@ -800,6 +808,27 @@ export function getDashboardHTML(): string {
     display: none;
   }
 
+  #new-msg-btn {
+    display: none;
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    background: var(--accent);
+    color: var(--bg-base);
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  #new-msg-btn.visible {
+    display: block;
+  }
+
   .typing-indicator {
     font-family: var(--mono);
     font-size: 11px;
@@ -901,8 +930,11 @@ export function getDashboardHTML(): string {
       <button id="stop-all">Kick all agents</button>
     </div>
     <div class="message-area">
-      <div id="messages">
-        <div class="empty">Waiting for transmissions...</div>
+      <div class="messages-wrap">
+        <div id="messages">
+          <div class="empty">Waiting for transmissions...</div>
+        </div>
+        <button id="new-msg-btn">New messages &darr;</button>
       </div>
       <div id="typing-bar"></div>
       <div id="image-preview"></div>
@@ -1174,6 +1206,8 @@ export function getDashboardHTML(): string {
       }
       markChannelRead(name);
       applyChannelFilter();
+      clearUnseen();
+      scrollBottom();
       renderTypingBar();
       renderUsers();
     }
@@ -1206,8 +1240,39 @@ export function getDashboardHTML(): string {
         div.classList.add("hidden-by-filter");
       }
       messagesEl.appendChild(div);
-      scrollBottom();
+      for (const img of div.querySelectorAll("img")) {
+        img.addEventListener("load", () => { if (atBottom) scrollBottom(); });
+      }
+      // Follow new messages only when already at the bottom (or when the operator sent it);
+      // otherwise remember the first unseen message and offer a jump button
+      if (atBottom || cls.includes("operator")) {
+        scrollBottom();
+      } else if (!firstUnseenEl && cls.startsWith("message") && !div.classList.contains("hidden-by-filter")) {
+        firstUnseenEl = div;
+        newMsgBtnEl.classList.add("visible");
+      }
     }
+
+    const newMsgBtnEl = document.getElementById("new-msg-btn");
+    let atBottom = true;
+    let firstUnseenEl = null;
+
+    function clearUnseen() {
+      firstUnseenEl = null;
+      newMsgBtnEl.classList.remove("visible");
+    }
+
+    messagesEl.addEventListener("scroll", () => {
+      atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 40;
+      if (firstUnseenEl && (atBottom || firstUnseenEl.getBoundingClientRect().top < messagesEl.getBoundingClientRect().bottom)) {
+        clearUnseen();
+      }
+    });
+
+    newMsgBtnEl.onclick = () => {
+      if (firstUnseenEl) firstUnseenEl.scrollIntoView({ block: "start", behavior: "smooth" });
+      clearUnseen();
+    };
 
     document.getElementById("stop-all").onclick = () => {
       fetch("/kick-all", { method: "POST", headers: adminHeaders });
@@ -1466,6 +1531,7 @@ export function getDashboardHTML(): string {
     // Clear button
     document.getElementById("clear-btn").onclick = () => {
       messagesEl.innerHTML = '<div class="empty">Waiting for transmissions...</div>';
+      clearUnseen();
     };
 
     const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
