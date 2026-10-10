@@ -1708,12 +1708,10 @@ export function getDashboardHTML(): string {
       const mimeType = header.slice(5).split(";")[0];
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
       const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
-      // A synthetic link click has no modifier keys, so Chrome opens a tab rather than a new window
-      const link = document.createElement("a");
-      link.href = url;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.click();
+      // Open after the click has been handled: browsers apply the Shift key of the triggering
+      // click (= new window) to anything opened during it. The click's user activation still
+      // allows opening a tab for a few seconds afterwards.
+      setTimeout(() => window.open(url, "_blank"), 0);
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
 
