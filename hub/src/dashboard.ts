@@ -183,6 +183,33 @@ export function getDashboardHTML(): string {
     gap: 12px;
     overflow-y: auto;
   }
+  #sidebar-resizer {
+    width: 7px;
+    margin: 0 -4px 0 -3px;
+    position: relative;
+    z-index: 5;
+    flex-shrink: 0;
+    cursor: col-resize;
+    touch-action: none;
+    outline: none;
+  }
+  #sidebar-resizer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    width: 3px;
+    background: transparent;
+    transition: background 0.15s ease;
+  }
+  #sidebar-resizer:hover::after, #sidebar-resizer:focus-visible::after, body.resizing #sidebar-resizer::after {
+    background: var(--accent);
+  }
+  body.resizing {
+    cursor: col-resize;
+    user-select: none;
+  }
   .sidebar-label {
     font-size: 11px;
     font-weight: 600;
@@ -929,6 +956,7 @@ export function getDashboardHTML(): string {
       <ul id="agent-list"></ul>
       <button id="stop-all">Kick all agents</button>
     </div>
+    <div id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0" title="Drag to resize, double-click to reset"></div>
     <div class="message-area">
       <div class="messages-wrap">
         <div id="messages">
@@ -1533,6 +1561,48 @@ export function getDashboardHTML(): string {
       messagesEl.innerHTML = '<div class="empty">Waiting for transmissions...</div>';
       clearUnseen();
     };
+
+    // Draggable sidebar width, remembered per browser
+    const SIDEBAR_WIDTH_KEY = "walkie-talkie-sidebar-width";
+    const SIDEBAR_DEFAULT_WIDTH = 220;
+    const sidebarEl = document.getElementById("sidebar");
+    const sidebarResizerEl = document.getElementById("sidebar-resizer");
+
+    function setSidebarWidth(width, save) {
+      const max = Math.max(SIDEBAR_DEFAULT_WIDTH, Math.min(600, window.innerWidth * 0.6));
+      const w = Math.round(Math.min(Math.max(width, 160), max));
+      sidebarEl.style.width = w + "px";
+      if (save) {
+        try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w)); } catch {}
+      }
+    }
+
+    try {
+      const storedWidth = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) || "", 10);
+      if (storedWidth) setSidebarWidth(storedWidth, false);
+    } catch {}
+
+    sidebarResizerEl.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      sidebarResizerEl.setPointerCapture(e.pointerId);
+      document.body.classList.add("resizing");
+    });
+    sidebarResizerEl.addEventListener("pointermove", (e) => {
+      if (!sidebarResizerEl.hasPointerCapture(e.pointerId)) return;
+      setSidebarWidth(e.clientX - sidebarEl.getBoundingClientRect().left, false);
+    });
+    // Fires after pointerup and pointercancel alike
+    sidebarResizerEl.addEventListener("lostpointercapture", () => {
+      document.body.classList.remove("resizing");
+      setSidebarWidth(sidebarEl.getBoundingClientRect().width, true);
+    });
+    sidebarResizerEl.addEventListener("dblclick", () => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH, true));
+    sidebarResizerEl.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const step = e.key === "ArrowLeft" ? -16 : 16;
+      setSidebarWidth(sidebarEl.getBoundingClientRect().width + step, true);
+    });
 
     const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
     const agentDialogEl = document.getElementById("agent-dialog");
