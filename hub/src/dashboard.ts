@@ -970,7 +970,7 @@ export function getDashboardHTML(): string {
     const unreadCounts = {}; // channel -> count
 
     function formatTime(ts) {
-      return new Date(ts).toLocaleTimeString();
+      return new Date(ts).toLocaleString();
     }
 
     function clearEmpty() {
