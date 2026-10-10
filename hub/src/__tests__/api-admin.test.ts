@@ -349,3 +349,33 @@ describe("human users", () => {
     expect(res.status).toBe(409);
   });
 });
+
+describe("GET /admin-channel-history paging", () => {
+  it("should return only messages older than before", async () => {
+    await fetch(`${ctx.baseUrl}/admin-channel-create`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({ name: "paging" }),
+    });
+    for (let i = 0; i < 3; i++) {
+      await fetch(`${ctx.baseUrl}/admin-send`, {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "@all", content: `page ${i}`, channel: "#paging" }),
+      });
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const history = async (query: string) =>
+      (
+        (await (
+          await fetch(`${ctx.baseUrl}/admin-channel-history?channel=${encodeURIComponent("#paging")}${query}`, {
+            headers: adminHeaders(),
+          })
+        ).json()) as { messages: { content: string; timestamp: number }[] }
+      ).messages;
+    const latest = await history("&limit=2");
+    expect(latest.map((m) => m.content)).toEqual(["page 1", "page 2"]);
+    const older = await history(`&limit=2&before=${latest[0].timestamp}`);
+    expect(older.map((m) => m.content)).toEqual(["page 0"]);
+  });
+});

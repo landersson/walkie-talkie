@@ -5,6 +5,7 @@ export function getDashboardHTML(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Walkie-Talkie</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2032%2032'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'g'%20x1%3D'0'%20y1%3D'0'%20x2%3D'1'%20y2%3D'1'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'%23818cf8'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'%23a78bfa'%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7'%20fill%3D'url(%23g)'%2F%3E%3Crect%20x%3D'9.5'%20y%3D'2.5'%20width%3D'3'%20height%3D'9'%20rx%3D'1.5'%20fill%3D'%23fff'%2F%3E%3Crect%20x%3D'18.5'%20y%3D'6'%20width%3D'3'%20height%3D'4'%20rx%3D'1'%20fill%3D'%23fff'%2F%3E%3Crect%20x%3D'8'%20y%3D'9'%20width%3D'16'%20height%3D'20'%20rx%3D'3.5'%20fill%3D'%23fff'%2F%3E%3Crect%20x%3D'11'%20y%3D'12.5'%20width%3D'10'%20height%3D'2'%20rx%3D'1'%20fill%3D'%236d68f2'%2F%3E%3Crect%20x%3D'11'%20y%3D'16.5'%20width%3D'10'%20height%3D'2'%20rx%3D'1'%20fill%3D'%236d68f2'%2F%3E%3Crect%20x%3D'11'%20y%3D'20.5'%20width%3D'10'%20height%3D'2'%20rx%3D'1'%20fill%3D'%236d68f2'%2F%3E%3Ccircle%20cx%3D'16'%20cy%3D'25.5'%20r%3D'1.4'%20fill%3D'%236d68f2'%2F%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -863,6 +864,17 @@ export function getDashboardHTML(): string {
     display: none;
   }
 
+  #history-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-align: center;
+    padding: 4px 0 10px;
+  }
+  #history-status:empty {
+    display: none;
+  }
+
   #new-msg-btn {
     display: none;
     position: absolute;
@@ -1286,6 +1298,8 @@ export function getDashboardHTML(): string {
       applyChannelFilter();
       clearUnseen();
       scrollBottom();
+      renderHistoryStatus();
+      if (!historyState[name]) loadHistory(name);
       renderTypingBar();
       renderUsers();
     }
@@ -1308,19 +1322,35 @@ export function getDashboardHTML(): string {
       }
     }
 
-    function addMessage(html, cls, channel) {
-      clearEmpty();
+    function buildMessageEl(html, cls, channel, ts, seq) {
       const div = document.createElement("div");
       div.className = "msg " + cls;
       if (channel) div.dataset.channel = channel;
+      div.dataset.ts = String(ts || Date.now());
+      if (seq) div.dataset.seq = String(seq);
       div.innerHTML = html;
       if (selectedChannel && channel && channel !== selectedChannel) {
         div.classList.add("hidden-by-filter");
       }
-      messagesEl.appendChild(div);
       for (const img of div.querySelectorAll("img")) {
         img.addEventListener("load", () => { if (atBottom) scrollBottom(); });
       }
+      return div;
+    }
+
+    function messageHtml(m) {
+      return '<span class="time">' + formatTime(m.timestamp) + '</span>' +
+        '<span class="channel-tag">' + (m.channel || "#all") + '</span>' +
+        '<span class="from">' + m.from + '</span> ' +
+        '<span class="to">&rarr; ' + m.to + '</span>' +
+        '<div class="content">' + m.content.replace(/</g, "&lt;") + '</div>' +
+        renderImageTag(m.image);
+    }
+
+    function addMessage(html, cls, channel, ts) {
+      clearEmpty();
+      const div = buildMessageEl(html, cls, channel, ts);
+      messagesEl.appendChild(div);
       // Follow new messages only when already at the bottom (or when you sent it);
       // otherwise remember the first unseen message and offer a jump button
       if (atBottom || cls.includes("mine")) {
@@ -1345,6 +1375,90 @@ export function getDashboardHTML(): string {
       if (firstUnseenEl && (atBottom || firstUnseenEl.getBoundingClientRect().top < messagesEl.getBoundingClientRect().bottom)) {
         clearUnseen();
       }
+    });
+
+    // Per-channel history: the newest page loads when a channel is first shown,
+    // older pages load when scrolled to the top
+    const HISTORY_PAGE = 200;
+    const historyState = {}; // channel -> { oldest, oldestSeq, done, loading, loadedOnce }
+    const firstLiveTs = {}; // channel -> first live message timestamp seen before its history loaded
+    let historyCleared = false;
+    const historyStatusEl = document.createElement("div");
+    historyStatusEl.id = "history-status";
+    messagesEl.prepend(historyStatusEl);
+
+    function renderHistoryStatus() {
+      const st = historyState[selectedChannel];
+      if (historyCleared || !st) historyStatusEl.textContent = "";
+      else if (st.loading) historyStatusEl.textContent = "Loading older messages...";
+      else if (st.done) historyStatusEl.textContent = "Start of " + selectedChannel + " history";
+      else historyStatusEl.textContent = "";
+    }
+
+    // Does view element el come after history message m? Order is (timestamp, seq);
+    // live messages carry no seq and count as newest within their millisecond.
+    function isAfter(el, m) {
+      if (!el.dataset.ts) return false;
+      const ts = Number(el.dataset.ts);
+      if (ts !== m.timestamp) return ts > m.timestamp;
+      return !el.dataset.seq || Number(el.dataset.seq) > m.seq;
+    }
+
+    // Merge chronologically sorted history messages into the view
+    function insertHistory(messages) {
+      if (messages.length > 0) clearEmpty();
+      let next = messagesEl.firstElementChild;
+      for (const m of messages) {
+        while (next && !isAfter(next, m)) next = next.nextElementSibling;
+        messagesEl.insertBefore(buildMessageEl(messageHtml(m), messageClass(m.from), m.channel || "#all", m.timestamp, m.seq), next);
+      }
+    }
+
+    function loadHistory(channel) {
+      if (historyCleared) return;
+      if (!historyState[channel]) {
+        // History must stop where live messages for this channel began, to avoid duplicates
+        historyState[channel] = { oldest: firstLiveTs[channel] || null, done: false, loading: false, loadedOnce: false };
+      }
+      const st = historyState[channel];
+      if (st.done || st.loading) return;
+      st.loading = true;
+      renderHistoryStatus();
+      let url = "/admin-channel-history?channel=" + encodeURIComponent(channel) + "&limit=" + HISTORY_PAGE;
+      if (st.oldest) url += "&before=" + st.oldest + (st.oldestSeq ? "&beforeSeq=" + st.oldestSeq : "");
+      fetch(url, { headers: adminHeaders })
+        .then(r => r.json())
+        .then(data => {
+          const msgs = data.messages || [];
+          const prevHeight = messagesEl.scrollHeight;
+          const prevTop = messagesEl.scrollTop;
+          insertHistory(msgs);
+          if (msgs.length > 0) {
+            st.oldest = msgs[0].timestamp;
+            st.oldestSeq = msgs[0].seq;
+          }
+          if (msgs.length < HISTORY_PAGE) st.done = true;
+          st.loading = false;
+          if (channel === selectedChannel) {
+            // First page: show the newest messages. Older pages: keep the reader's place.
+            if (!st.loadedOnce) scrollBottom();
+            else messagesEl.scrollTop = prevTop + (messagesEl.scrollHeight - prevHeight);
+          }
+          st.loadedOnce = true;
+          renderHistoryStatus();
+          // Keep going while the channel doesn't fill the view yet
+          if (channel === selectedChannel && !st.done && messagesEl.scrollHeight <= messagesEl.clientHeight) {
+            loadHistory(channel);
+          }
+        })
+        .catch(() => {
+          st.loading = false;
+          renderHistoryStatus();
+        });
+    }
+
+    messagesEl.addEventListener("scroll", () => {
+      if (messagesEl.scrollTop < 80 && historyState[selectedChannel]?.loadedOnce) loadHistory(selectedChannel);
     });
 
     newMsgBtnEl.onclick = () => {
@@ -1610,6 +1724,9 @@ export function getDashboardHTML(): string {
     // Clear button
     document.getElementById("clear-btn").onclick = () => {
       messagesEl.innerHTML = '<div class="empty">Waiting for transmissions...</div>';
+      messagesEl.prepend(historyStatusEl);
+      historyCleared = true;
+      renderHistoryStatus();
       clearUnseen();
     };
 
@@ -1782,30 +1899,11 @@ export function getDashboardHTML(): string {
           }
         }).catch(() => {});
 
-      // Load message history from DB (after users, so human senders are known)
-      usersLoaded.then(() => fetch("/admin-channel-history", { headers: adminHeaders }))
-        .then(r => r.json())
-        .then(data => {
-          if (data.messages && data.messages.length > 0) {
-            clearEmpty();
-            for (const msg of data.messages) {
-              const cls = messageClass(msg.from);
-              const channelTag = '<span class="channel-tag">' + (msg.channel || "#all") + '</span>';
-              addMessage(
-                '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
-                channelTag +
-                '<span class="from">' + msg.from + '</span> ' +
-                '<span class="to">&rarr; ' + msg.to + '</span>' +
-                '<div class="content">' + msg.content.replace(/</g, "&lt;") + '</div>' +
-                renderImageTag(msg.image),
-                cls,
-                msg.channel || "#all"
-              );
-            }
-          }
-          // Mark #all as read after loading history
-          markChannelRead("#all");
-        }).catch(() => {});
+      // Load the open channel's history (after users, so human senders are known)
+      usersLoaded.then(() => {
+        loadHistory(selectedChannel);
+        markChannelRead(selectedChannel);
+      });
 
       const es = new EventSource("/events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
 
@@ -1849,20 +1947,10 @@ export function getDashboardHTML(): string {
           if (users.has(ev.from)) users.set(ev.from, true);
           const existingTimer = typingUsers.get(ev.from);
           if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
-          const cls = messageClass(ev.from, ev.fromRole);
-          const channelTag = '<span class="channel-tag">' + (ev.channel || "#all") + '</span>';
-          addMessage(
-            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-            channelTag +
-            '<span class="from">' + ev.from + '</span> ' +
-            '<span class="to">&rarr; ' + ev.to + '</span>' +
-            '<div class="content">' + ev.content.replace(/</g, "&lt;") + '</div>' +
-            renderImageTag(ev.image),
-            cls,
-            ev.channel || "#all"
-          );
-          // Unread tracking
           const msgChannel = ev.channel || "#all";
+          if (!historyState[msgChannel] && !firstLiveTs[msgChannel]) firstLiveTs[msgChannel] = ev.timestamp;
+          addMessage(messageHtml(ev), messageClass(ev.from, ev.fromRole), msgChannel, ev.timestamp);
+          // Unread tracking
           if (msgChannel === selectedChannel) {
             markChannelRead(msgChannel);
           } else {
@@ -1901,6 +1989,7 @@ export function getDashboardHTML(): string {
         } else if (ev.type === "channel_delete") {
           if (selectedChannel === ev.name) selectedChannel = "#all";
           delete unreadCounts[ev.name];
+          delete historyState[ev.name];
           refreshChannels();
           addMessage(
             '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
@@ -1936,8 +2025,11 @@ export function getDashboardHTML(): string {
     }
 
     // Login: the admin token is never embedded in the page, and each person picks a name.
-    // Both are remembered in this browser, so the dialog only asks for what is missing.
+    // Both are remembered, so the dialog only asks for what is missing. The name is kept per tab
+    // (sessionStorage) so different tabs can be different people; the last name used
+    // (localStorage) is the default for new tabs.
     const USER_STORAGE_KEY = "walkie-talkie-user-name";
+    const SWITCH_USER_KEY = "walkie-talkie-switch-user";
     const loginDialogEl = document.getElementById("login-dialog");
     const loginInputEl = document.getElementById("login-token");
     const loginNameEl = document.getElementById("login-name");
@@ -1946,15 +2038,21 @@ export function getDashboardHTML(): string {
     let loginNeedsToken = false;
     let loginNeedsName = false;
 
-    function readStored(key) {
-      try { return localStorage.getItem(key) || ""; } catch { return ""; }
+    function readStored(key, perTab) {
+      try { return (perTab ? sessionStorage : localStorage).getItem(key) || ""; } catch { return ""; }
     }
 
-    function store(key, value) {
+    function store(key, value, perTab) {
       try {
-        if (value) localStorage.setItem(key, value);
-        else localStorage.removeItem(key);
+        const area = perTab ? sessionStorage : localStorage;
+        if (value) area.setItem(key, value);
+        else area.removeItem(key);
       } catch {}
+    }
+
+    function rememberedName() {
+      if (readStored(SWITCH_USER_KEY, true)) return "";
+      return readStored(USER_STORAGE_KEY, true) || readStored(USER_STORAGE_KEY);
     }
 
     // Resolves to null on success, or { field, error } describing what to ask for again
@@ -1968,6 +2066,8 @@ export function getDashboardHTML(): string {
           adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-Walkie-User": name };
           store(TOKEN_STORAGE_KEY, token);
           store(USER_STORAGE_KEY, name);
+          store(USER_STORAGE_KEY, name, true);
+          store(SWITCH_USER_KEY, "", true);
           document.getElementById("whoami").innerHTML = "Signed in as <strong>" + name + "</strong>";
           loginDialogEl.style.display = "none";
           startDashboard();
@@ -1987,13 +2087,17 @@ export function getDashboardHTML(): string {
 
     function submitLogin(asName) {
       const token = loginNeedsToken ? loginInputEl.value.trim() : readStored(TOKEN_STORAGE_KEY);
-      const name = asName || (loginNeedsName ? loginNameEl.value.trim() : readStored(USER_STORAGE_KEY));
+      const name = asName || (loginNeedsName ? loginNameEl.value.trim() : rememberedName());
       if (!token || !name) return;
       tryLogin(token, name)
         .then(failure => {
           if (!failure) return;
           if (failure.field === "token") { store(TOKEN_STORAGE_KEY, ""); loginNeedsToken = true; }
-          else { store(USER_STORAGE_KEY, ""); loginNeedsName = true; }
+          else {
+            store(USER_STORAGE_KEY, "", true);
+            if (readStored(USER_STORAGE_KEY) === name) store(USER_STORAGE_KEY, "");
+            loginNeedsName = true;
+          }
           showLogin(failure.error);
         })
         .catch(() => showLogin("Could not reach the Hub"));
@@ -2004,13 +2108,15 @@ export function getDashboardHTML(): string {
     loginInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
     loginNameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
 
+    // Only this tab switches; other tabs keep their names
     document.getElementById("switch-user-btn").onclick = () => {
-      store(USER_STORAGE_KEY, "");
+      store(SWITCH_USER_KEY, "1", true);
+      store(USER_STORAGE_KEY, "", true);
       location.reload();
     };
 
     loginNeedsToken = !readStored(TOKEN_STORAGE_KEY);
-    loginNeedsName = !readStored(USER_STORAGE_KEY);
+    loginNeedsName = !rememberedName();
     if (loginNeedsToken || loginNeedsName) showLogin();
     else submitLogin();
   </script>

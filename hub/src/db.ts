@@ -172,17 +172,29 @@ function parseMessageRow(row: Record<string, unknown>): Message {
     channel: row.channel as string,
     timestamp: row.timestamp as number,
     image: imageStr ? (JSON.parse(imageStr) as MessageImage) : undefined,
+    seq: row.seq as number | undefined,
   };
 }
 
-export function dbGetChannelMessages(channel: string, limit = 50): Message[] {
+/**
+ * Newest `limit` messages of a channel, oldest first. With `before`, only messages older than
+ * that point; `before.seq` (a message's rowid) breaks ties between equal timestamps.
+ */
+export function dbGetChannelMessages(
+  channel: string,
+  limit = 50,
+  before?: { timestamp: number; seq?: number },
+): Message[] {
+  const ts = before?.timestamp ?? Number.MAX_SAFE_INTEGER;
   const rows = db
     .prepare(
       `SELECT * FROM (
-        SELECT id, "from", "to", content, channel, timestamp, image FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?
-      ) ORDER BY timestamp ASC`,
+        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
+        WHERE channel = ? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
+        ORDER BY timestamp DESC, rowid DESC LIMIT ?
+      ) ORDER BY timestamp ASC, seq ASC`,
     )
-    .all(channel, limit) as Record<string, unknown>[];
+    .all(channel, ts, ts, before?.seq ?? 0, limit) as Record<string, unknown>[];
   return rows.map(parseMessageRow);
 }
 
@@ -190,8 +202,9 @@ export function dbGetRecentMessages(limit = 200): Message[] {
   const rows = db
     .prepare(
       `SELECT * FROM (
-        SELECT id, "from", "to", content, channel, timestamp, image FROM messages ORDER BY timestamp DESC LIMIT ?
-      ) ORDER BY timestamp ASC`,
+        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
+        ORDER BY timestamp DESC, rowid DESC LIMIT ?
+      ) ORDER BY timestamp ASC, seq ASC`,
     )
     .all(limit) as Record<string, unknown>[];
   return rows.map(parseMessageRow);

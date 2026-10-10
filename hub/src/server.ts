@@ -461,8 +461,11 @@ const handleAdminChannelHistory: RouteHandler = async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const channel = url.searchParams.get("channel");
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "200", 10) || 200, 1), 500);
+  const beforeTs = parseInt(url.searchParams.get("before") ?? "", 10);
+  const beforeSeq = parseInt(url.searchParams.get("beforeSeq") ?? "", 10);
+  const before = beforeTs ? { timestamp: beforeTs, seq: beforeSeq || undefined } : undefined;
   if (channel) {
-    const messages = dbGetChannelMessages(channel, limit);
+    const messages = dbGetChannelMessages(channel, limit, before);
     sendJson(res, 200, { messages });
   } else {
     const messages = dbGetRecentMessages(limit);

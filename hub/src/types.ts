@@ -14,6 +14,7 @@ export interface Message {
   timestamp: number;
   image?: MessageImage;
   fromRole?: UserRole; // sender's role at send time (not persisted)
+  seq?: number; // storage order (SQLite rowid), set on history reads
 }
 
 export type UserRole = "agent" | "bridge" | "human";

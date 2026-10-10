@@ -151,6 +151,27 @@ describe("messages", () => {
     expect(dbGetRecentMessages(3).map((m) => m.id)).toEqual(["other-2", "other-3", "other-4"]);
   });
 
+  it("should page back through a channel with before", () => {
+    for (let i = 0; i < 5; i++) {
+      dbSaveMessage(makeMsg({ id: `page-${i}`, timestamp: 1000 + i }));
+    }
+    expect(dbGetChannelMessages("#all", 2).map((m) => m.id)).toEqual(["page-3", "page-4"]);
+    expect(dbGetChannelMessages("#all", 2, { timestamp: 1003 }).map((m) => m.id)).toEqual(["page-1", "page-2"]);
+    expect(dbGetChannelMessages("#all", 2, { timestamp: 1001 }).map((m) => m.id)).toEqual(["page-0"]);
+  });
+
+  it("should page through equal timestamps in insertion order without gaps", () => {
+    for (let i = 0; i < 5; i++) {
+      dbSaveMessage(makeMsg({ id: `tie-${i}`, timestamp: 5000 }));
+    }
+    const newest = dbGetChannelMessages("#all", 2);
+    expect(newest.map((m) => m.id)).toEqual(["tie-3", "tie-4"]);
+    const older = dbGetChannelMessages("#all", 2, { timestamp: newest[0].timestamp, seq: newest[0].seq });
+    expect(older.map((m) => m.id)).toEqual(["tie-1", "tie-2"]);
+    const oldest = dbGetChannelMessages("#all", 2, { timestamp: older[0].timestamp, seq: older[0].seq });
+    expect(oldest.map((m) => m.id)).toEqual(["tie-0"]);
+  });
+
   it("should prune #all channel beyond 200 messages", () => {
     for (let i = 0; i < 210; i++) {
       dbSaveMessage(
