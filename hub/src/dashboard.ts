@@ -960,6 +960,32 @@ export function getDashboardHTML(): string {
   .msg-image img:hover {
     border-color: rgba(255,255,255,0.15);
   }
+  #image-viewer {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0,0,0,0.85);
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    cursor: zoom-out;
+  }
+  #image-viewer.open {
+    display: flex;
+  }
+  #image-viewer img {
+    max-width: 95vw;
+    max-height: calc(100vh - 60px);
+    object-fit: contain;
+    border-radius: 6px;
+  }
+  #image-viewer .hint {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
   @keyframes typingBlink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
@@ -1018,6 +1044,10 @@ export function getDashboardHTML(): string {
         <button class="send-btn" id="send-btn">Send</button>
       </div>
     </div>
+  </div>
+  <div id="image-viewer">
+    <img alt="">
+    <span class="hint">Click or Esc to close &middot; Shift+click an image to open it in a new tab</span>
   </div>
   <div class="dialog-overlay" id="login-dialog" style="display:none">
     <div class="dialog">
@@ -1658,9 +1688,53 @@ export function getDashboardHTML(): string {
       if (timer) { clearTimeout(timer); pendingReply.delete(name); }
     }
 
+    // Images: click opens the in-page viewer, Shift+click opens a new tab.
+    // Browsers refuse to open data: URLs in a tab, so the tab gets a blob: URL instead.
+    const imageViewerEl = document.getElementById("image-viewer");
+    const imageViewerImgEl = imageViewerEl.querySelector("img");
+
+    function openImageViewer(src) {
+      imageViewerImgEl.src = src;
+      imageViewerEl.classList.add("open");
+    }
+
+    function closeImageViewer() {
+      imageViewerEl.classList.remove("open");
+      imageViewerImgEl.removeAttribute("src");
+    }
+
+    function openImageInTab(dataUrl) {
+      const [header, base64] = dataUrl.split(",");
+      const mimeType = header.slice(5).split(";")[0];
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      // A synthetic link click has no modifier keys, so Chrome opens a tab rather than a new window
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+
+    messagesEl.addEventListener("mousedown", (e) => {
+      // Stop Shift+click on an image from selecting text
+      if (e.shiftKey && e.target.closest(".msg-image img")) e.preventDefault();
+    });
+    messagesEl.addEventListener("click", (e) => {
+      const img = e.target.closest(".msg-image img");
+      if (!img) return;
+      if (e.shiftKey) openImageInTab(img.src);
+      else openImageViewer(img.src);
+    });
+    imageViewerEl.addEventListener("click", closeImageViewer);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && imageViewerEl.classList.contains("open")) closeImageViewer();
+    });
+
     function renderImageTag(image) {
       if (!image) return "";
-      return '<div class="msg-image"><img src="data:' + image.mimeType + ';base64,' + image.data + '" onclick="window.open(this.src)"></div>';
+      return '<div class="msg-image"><img src="data:' + image.mimeType + ';base64,' + image.data + '" title="Click to enlarge, Shift+click to open in a new tab"></div>';
     }
 
     function sendMessage() {
