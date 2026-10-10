@@ -33,6 +33,7 @@ export function routeMessage(
   image?: MessageImage,
 ): Message {
   const members = getChannelMembers(channel);
+  const senderRole = getUserRole(from) ?? undefined;
 
   if (to === "@all") {
     const message: Message = {
@@ -43,16 +44,17 @@ export function routeMessage(
       channel,
       timestamp: Date.now(),
       image,
+      fromRole: senderRole,
     };
 
     dbSaveMessage(message);
 
-    const senderRole = getUserRole(from);
-
     // Deliver to all channel members except sender.
     // When a bridge sends @all, skip other bridges to avoid relay loops.
+    // Humans read everything from the dashboard event stream, so they get no queue.
     for (const user of members) {
       if (user === from) continue;
+      if (getUserRole(user) === "human") continue;
       if (senderRole === "bridge" && getUserRole(user) === "bridge") continue;
       enqueueAndDeliver(user, message);
     }
@@ -65,7 +67,8 @@ export function routeMessage(
     throw new Error(`User "${targetName}" is not connected`);
   }
 
-  if (!isChannelMember(channel, targetName)) {
+  // Humans see every channel on the dashboard, so they can be addressed from any channel
+  if (getUserRole(targetName) !== "human" && !isChannelMember(channel, targetName)) {
     throw new Error(`User "${targetName}" is not a member of ${channel}`);
   }
 
@@ -77,13 +80,14 @@ export function routeMessage(
     channel,
     timestamp: Date.now(),
     image,
+    fromRole: senderRole,
   };
 
   dbSaveMessage(message);
 
   // Deliver to all channel members except sender
   for (const user of members) {
-    if (user !== from) {
+    if (user !== from && getUserRole(user) !== "human") {
       enqueueAndDeliver(user, message);
     }
   }

@@ -30298,6 +30298,9 @@ var MIME_TYPES = {
   ".gif": "image/gif",
   ".webp": "image/webp"
 };
+function senderLabel(m) {
+  return m.fromRole === "human" ? `${m.from} (human)` : m.from;
+}
 function getMimeType(source) {
   const ext = path.extname(source).toLowerCase();
   return MIME_TYPES[ext] ?? "image/png";
@@ -30479,7 +30482,7 @@ function createMcpServer(hubUrl2, joinTok) {
             });
           }
           const imageTag = m.image ? " [image attached]" : "";
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from} \u2192 ${m.to}: ${m.content}${imageTag}`;
+          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} \u2192 ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text", text: line });
         }
         const channels = [
@@ -30543,7 +30546,7 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
             });
           }
           const imageTag = m.image ? " [image attached]" : "";
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from} \u2192 ${m.to}: ${m.content}${imageTag}`;
+          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} \u2192 ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text", text: line });
         }
         const channels = [
@@ -30593,7 +30596,10 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
       }
       try {
         const [users, channels] = await Promise.all([client.users(currentToken), client.listChannels(currentToken)]);
-        const userText = users.length > 0 ? `Connected users: ${users.join(", ")}` : "No users connected.";
+        const userText = users.length > 0 ? `Connected users: ${users.map((u) => {
+          const tags = [u.role === "human" ? "human" : "", u.online ? "" : "offline"].filter(Boolean);
+          return tags.length > 0 ? `${u.name} (${tags.join(", ")})` : u.name;
+        }).join(", ")}` : "No users connected.";
         const channelText = channels.length > 0 ? `Channels: ${channels.map((c) => `${c.name} (${c.memberCount} members)`).join(", ")}` : "No channels.";
         return {
           content: [

@@ -11,10 +11,11 @@ afterAll(async () => {
   await stopTestServer(ctx);
 });
 
-function adminHeaders(): Record<string, string> {
+function adminHeaders(user?: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
     Authorization: `Bearer ${ctx.adminToken}`,
+    ...(user ? { "X-Walkie-User": user } : {}),
   };
 }
 
@@ -42,18 +43,10 @@ describe("POST /kick", () => {
 });
 
 describe("POST /kick-all", () => {
-  it("should kick all agents but exclude operator", async () => {
+  it("should kick all agents but exclude humans", async () => {
     await registerUser(ctx, "ka-agent1");
     await registerUser(ctx, "ka-agent2");
-    // Register operator
-    await fetch(`${ctx.baseUrl}/register`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${ctx.joinToken}`,
-      },
-      body: JSON.stringify({ name: "operator" }),
-    });
+    await fetch(`${ctx.baseUrl}/admin-login`, { method: "POST", headers: adminHeaders("ka-human") });
 
     const res = await fetch(`${ctx.baseUrl}/kick-all`, {
       method: "POST",
@@ -62,13 +55,14 @@ describe("POST /kick-all", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; kicked: string[] };
     expect(body.kicked).not.toContain("operator");
+    expect(body.kicked).not.toContain("ka-human");
     expect(body.kicked).toContain("ka-agent1");
     expect(body.kicked).toContain("ka-agent2");
 
-    // Verify operator is still registered
+    // Verify humans are still registered
     const usersRes = await fetch(`${ctx.baseUrl}/users`);
     const usersBody = (await usersRes.json()) as { users: { name: string }[] };
-    expect(usersBody.users.map((u) => u.name)).toContain("operator");
+    expect(usersBody.users.map((u) => u.name)).toEqual(expect.arrayContaining(["operator", "ka-human"]));
   });
 });
 
@@ -228,5 +222,130 @@ describe("GET /admin-unread-counts", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { counts: Record<string, number> };
     expect(typeof body.counts).toBe("object");
+  });
+});
+
+describe("human users", () => {
+  type UserInfo = { name: string; online: boolean; role: string };
+  async function getUser(name: string): Promise<UserInfo | undefined> {
+    const body = (await (await fetch(`${ctx.baseUrl}/users`)).json()) as { users: UserInfo[] };
+    return body.users.find((u) => u.name === name);
+  }
+
+  it("should log in a human by name", async () => {
+    const res = await fetch(`${ctx.baseUrl}/admin-login`, { method: "POST", headers: adminHeaders("alice") });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { name: string }).name).toBe("alice");
+    expect((await getUser("alice"))?.role).toBe("human");
+  });
+
+  it("should reject invalid and reserved names", async () => {
+    for (const name of ["bad name", "system", "x".repeat(33)]) {
+      const res = await fetch(`${ctx.baseUrl}/admin-login`, { method: "POST", headers: adminHeaders(name) });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("should reject a name held by an agent", async () => {
+    await registerUser(ctx, "agent-taken");
+    const res = await fetch(`${ctx.baseUrl}/admin-login`, { method: "POST", headers: adminHeaders("agent-taken") });
+    expect(res.status).toBe(409);
+  });
+
+  it("should send as the calling human and tag the sender role for agents", async () => {
+    const token = await registerUser(ctx, "h-recv");
+    const res = await fetch(`${ctx.baseUrl}/admin-send`, {
+      method: "POST",
+      headers: adminHeaders("bob"),
+      body: JSON.stringify({ to: "@all", content: "hi from bob" }),
+    });
+    expect(res.status).toBe(200);
+    const inbox = (await (
+      await fetch(`${ctx.baseUrl}/inbox`, { headers: { Authorization: `Bearer ${token}` } })
+    ).json()) as { messages: { from: string; fromRole?: string; content: string }[] };
+    const msg = inbox.messages.find((m) => m.content === "hi from bob");
+    expect(msg?.from).toBe("bob");
+    expect(msg?.fromRole).toBe("human");
+  });
+
+  it("should let an agent reply to a human from any channel", async () => {
+    await fetch(`${ctx.baseUrl}/admin-login`, { method: "POST", headers: adminHeaders("carol") });
+    await fetch(`${ctx.baseUrl}/admin-channel-create`, {
+      method: "POST",
+      headers: adminHeaders("carol"),
+      body: JSON.stringify({ name: "h-proj" }),
+    });
+    const token = await registerUser(ctx, "h-agent");
+    const agentHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+    await fetch(`${ctx.baseUrl}/channel-join`, {
+      method: "POST",
+      headers: agentHeaders,
+      body: JSON.stringify({ channel: "#h-proj" }),
+    });
+    const res = await fetch(`${ctx.baseUrl}/send`, {
+      method: "POST",
+      headers: agentHeaders,
+      body: JSON.stringify({ to: "@carol", content: "done", channel: "#h-proj" }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should keep unread counts per human", async () => {
+    await fetch(`${ctx.baseUrl}/admin-channel-create`, {
+      method: "POST",
+      headers: adminHeaders("dave"),
+      body: JSON.stringify({ name: "h-unread" }),
+    });
+    const token = await registerUser(ctx, "h-unread-agent");
+    const agentHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+    await fetch(`${ctx.baseUrl}/channel-join`, {
+      method: "POST",
+      headers: agentHeaders,
+      body: JSON.stringify({ channel: "#h-unread" }),
+    });
+    await fetch(`${ctx.baseUrl}/send`, {
+      method: "POST",
+      headers: agentHeaders,
+      body: JSON.stringify({ to: "@all", content: "news", channel: "#h-unread" }),
+    });
+    await fetch(`${ctx.baseUrl}/admin-mark-read`, {
+      method: "POST",
+      headers: adminHeaders("dave"),
+      body: JSON.stringify({ channel: "#h-unread" }),
+    });
+    const counts = async (user: string) =>
+      (
+        (await (await fetch(`${ctx.baseUrl}/admin-unread-counts`, { headers: adminHeaders(user) })).json()) as {
+          counts: Record<string, number>;
+        }
+      ).counts["#h-unread"];
+    expect(await counts("dave")).toBeUndefined();
+    expect(await counts("erin")).toBe(1);
+  });
+
+  it("should refuse to kick a human", async () => {
+    await fetch(`${ctx.baseUrl}/admin-login`, { method: "POST", headers: adminHeaders("frank") });
+    const res = await fetch(`${ctx.baseUrl}/kick`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({ name: "frank" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("should track presence from the dashboard event stream", async () => {
+    const ac = new AbortController();
+    const stream = await fetch(`${ctx.baseUrl}/events?token=${ctx.adminToken}&name=gina`, { signal: ac.signal });
+    expect(stream.status).toBe(200);
+    expect(await getUser("gina")).toMatchObject({ role: "human", online: true });
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await getUser("gina")).toMatchObject({ role: "human", online: false });
+  });
+
+  it("should reject the event stream for a name held by an agent", async () => {
+    await registerUser(ctx, "agent-stream");
+    const res = await fetch(`${ctx.baseUrl}/events?token=${ctx.adminToken}&name=agent-stream`);
+    expect(res.status).toBe(409);
   });
 });

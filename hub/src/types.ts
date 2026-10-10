@@ -13,9 +13,10 @@ export interface Message {
   channel: string;
   timestamp: number;
   image?: MessageImage;
+  fromRole?: UserRole; // sender's role at send time (not persisted)
 }
 
-export type UserRole = "agent" | "bridge";
+export type UserRole = "agent" | "bridge" | "human";
 
 export interface User {
   name: string;

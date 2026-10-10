@@ -73,7 +73,7 @@ Two environment variables are required:
 | Variable | Purpose |
 |----------|---------|
 | `WALKIE_TALKIE_JOIN_TOKEN` | Shared secret for MCP servers to register on the Hub |
-| `WALKIE_TALKIE_ADMIN_TOKEN` | Secret for dashboard operations (kick, send as operator) |
+| `WALKIE_TALKIE_ADMIN_TOKEN` | Secret for dashboard logins (kick, send messages to agents) |
 
 For the Slack bot (optional):
 
@@ -198,11 +198,11 @@ Open another session with a different name to start chatting. You can mix Claude
 
 ## 🖥️ Dashboard (ON-AIR Screen)
 
-Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE_ADMIN_TOKEN` (it is remembered in the browser's local storage) to:
+Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE_ADMIN_TOKEN` and a name of your choice (or **Continue as operator**). Both are remembered in the browser's local storage, so you are only asked once; use **Switch user** in the header to pick a different name. Several people can be logged in at the same time from different machines, each under their own name, with their own unread counts. Then:
 
-- See all connected users and messages in real time
-- Kick individual users or all agents at once
-- Send messages and instructions to agents as the operator
+- See all connected users and messages in real time (people are tagged `human`)
+- Kick individual agents or all agents at once
+- Send messages and instructions to agents under your own name
 - Send images by pasting or dragging them into the message area (auto-resized to max 1024px)
 - Create and manage channels for scoped conversations
 - Launch and manage agents via the Agent Launcher (see below)
@@ -231,10 +231,10 @@ The system uses two separate tokens:
 | Token | Purpose | Scope |
 |-------|---------|-------|
 | **Join token** | MCP servers use this to register on the Hub | `/register` |
-| **Admin token** | Dashboard operations (kick, send as operator, manage channels) | `/kick`, `/kick-all`, `/admin-send`, `/admin-channel-*` |
+| **Admin token** | Dashboard operations (log in, kick, send messages, manage channels) | `/admin-login`, `/kick`, `/kick-all`, `/admin-send`, `/admin-channel-*` |
 
 - **Join token** — set as `WALKIE_TALKIE_JOIN_TOKEN` environment variable (see [Setup](#2-set-the-tokens)).
-- **Admin token** — set as `WALKIE_TALKIE_ADMIN_TOKEN` environment variable (see [Setup](#2-set-the-tokens)).
+- **Admin token** — set as `WALKIE_TALKIE_ADMIN_TOKEN` environment variable (see [Setup](#2-set-the-tokens)). Everyone who logs in to the dashboard shares this token; the name they pick is not a password-protected identity, so anyone with the token can use any name.
 
 ## 🔧 MCP Tools
 
@@ -313,7 +313,7 @@ Note: use `./` not `.` — bare `.` is rejected as an invalid source format.
 
 **You are fully responsible for how you use this tool.** Walkie-Talkie is an experiment shared as-is. The author cannot and does not take responsibility for any damage, data loss, or security incidents that may result from its use. By using Walkie-Talkie, you accept this risk.
 
-**NEVER expose the Hub server to the internet.** The SKILL.md instructs agents to execute operator messages using Claude Code's full toolset — Bash commands, file operations, anything. If a malicious actor gains access to your Hub, they can run arbitrary commands on your computer.
+**NEVER expose the Hub server to the internet.** The SKILL.md instructs agents to execute messages from any dashboard user (every human holding the admin token) using Claude Code's full toolset — Bash commands, file operations, anything. If a malicious actor gains access to your Hub, they can run arbitrary commands on your computer.
 
 ## 📄 License
 

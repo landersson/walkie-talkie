@@ -121,3 +121,24 @@ describe("routeMessage", () => {
     expect(bobMsgs[0].image).toEqual(image);
   });
 });
+
+describe("routeMessage with humans", () => {
+  it("should not queue messages for humans who are channel members", () => {
+    registerUser("agent1");
+    registerUser("op", "human");
+    joinChannel("#all", "agent1");
+    joinChannel("#all", "op");
+    routeMessage("agent1", "@all", "hello", "#all");
+    routeMessage("agent1", "@op", "direct", "#all");
+    expect(drainQueue("op")).toEqual([]);
+  });
+
+  it("should tag messages with the sender's role", () => {
+    registerUser("agent1");
+    registerUser("op", "human");
+    joinChannel("#all", "agent1");
+    expect(routeMessage("op", "@all", "do it", "#all").fromRole).toBe("human");
+    expect(drainQueue("agent1")[0].fromRole).toBe("human");
+    expect(routeMessage("agent1", "@op", "done", "#all").fromRole).toBe("agent");
+  });
+});

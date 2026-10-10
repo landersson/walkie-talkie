@@ -160,7 +160,7 @@ export function getDashboardHTML(): string {
     color: var(--accent);
     border-color: rgba(129,140,248,0.3);
   }
-  body.filter-operator .msg:not(.operator):not(.system) {
+  body.filter-mine .msg:not(.mine):not(.system) {
     opacity: 0.3;
   }
 
@@ -350,6 +350,25 @@ export function getDashboardHTML(): string {
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-primary);
+  }
+  .human-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--yellow);
+    background: var(--yellow-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    flex-shrink: 0;
+  }
+  .whoami {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .whoami strong {
+    color: var(--text-primary);
+    font-weight: 500;
   }
   .kick-btn {
     background: transparent;
@@ -645,14 +664,23 @@ export function getDashboardHTML(): string {
   .msg.message:hover {
     border-color: var(--border);
   }
-  .msg.operator {
+  .msg.mine {
     background: var(--accent-soft);
     border-color: rgba(129,140,248,0.18);
     border-left: 3px solid var(--accent);
   }
-  .msg.operator:hover {
+  .msg.mine:hover {
     border-color: rgba(129,140,248,0.3);
     border-left-color: var(--accent);
+  }
+  .msg.human {
+    background: var(--yellow-soft);
+    border-color: rgba(251,191,36,0.14);
+    border-left: 3px solid var(--yellow);
+  }
+  .msg.human:hover {
+    border-color: rgba(251,191,36,0.28);
+    border-left-color: var(--yellow);
   }
   .msg.system {
     background: transparent;
@@ -943,6 +971,8 @@ export function getDashboardHTML(): string {
     <span id="status">connected</span>
     <span id="channel-header"></span>
     <div class="header-spacer"></div>
+    <span class="whoami" id="whoami"></span>
+    <button class="filter-btn" id="switch-user-btn">Switch user</button>
     <button class="filter-btn" id="filter-btn">My messages</button>
     <button class="clear-btn" id="clear-btn">Clear</button>
   </header>
@@ -979,12 +1009,16 @@ export function getDashboardHTML(): string {
   </div>
   <div class="dialog-overlay" id="login-dialog" style="display:none">
     <div class="dialog">
-      <h2>Admin login</h2>
-      <label>Admin token
+      <h2>Log in</h2>
+      <label id="login-token-row">Admin token
         <input type="password" id="login-token" placeholder="WALKIE_TALKIE_ADMIN_TOKEN" autocomplete="current-password">
-        <span id="login-error" style="color:var(--red);font-size:11px;display:none"></span>
       </label>
+      <label id="login-name-row">Your name
+        <input type="text" id="login-name" placeholder="e.g. alice" maxlength="32" autocomplete="nickname">
+      </label>
+      <span id="login-error" style="color:var(--red);font-size:11px;display:none"></span>
       <div class="dialog-buttons">
+        <button class="btn-cancel" id="login-as-operator">Continue as operator</button>
         <button class="btn-save" id="login-submit">Log in</button>
       </div>
     </div>
@@ -1020,6 +1054,19 @@ export function getDashboardHTML(): string {
     const statusEl = document.getElementById("status");
     const channelHeaderEl = document.getElementById("channel-header");
     const users = new Map(); // name -> online (boolean)
+    const humans = new Set(); // names of dashboard users (role "human")
+    let MY_NAME = "";
+
+    // "operator" predates the human role, so its old messages count as human too
+    function isHuman(name) {
+      return humans.has(name) || name === "operator";
+    }
+
+    function messageClass(from, fromRole) {
+      if (from === MY_NAME) return "message mine";
+      if (fromRole === "human" || isHuman(from)) return "message human";
+      return "message";
+    }
     const channels = new Map(); // name -> { memberCount, createdBy, members }
     const typingUsers = new Map(); // name -> { timeoutId, channel }
     const pendingReply = new Map(); // name -> timeoutId (30s no-TYPING → grey)
@@ -1071,13 +1118,16 @@ export function getDashboardHTML(): string {
         const dotCls = online ? "user-dot" : "user-dot offline";
         const tu = typingUsers.get(u);
         const typingHtml = tu && tu.channel === selectedChannel ? '<span class="typing-indicator">typing...</span>' : '';
-        info.innerHTML = '<span class="' + dotCls + '"></span><span class="user-name">' + u + '</span>' + typingHtml;
-        const btn = document.createElement("button");
-        btn.className = "kick-btn";
-        btn.textContent = "kick";
-        btn.onclick = () => kick(u);
+        const humanHtml = isHuman(u) ? '<span class="human-tag">' + (u === MY_NAME ? "you" : "human") + '</span>' : '';
+        info.innerHTML = '<span class="' + dotCls + '"></span><span class="user-name">' + u + '</span>' + humanHtml + typingHtml;
         li.appendChild(info);
-        li.appendChild(btn);
+        if (!isHuman(u)) {
+          const btn = document.createElement("button");
+          btn.className = "kick-btn";
+          btn.textContent = "kick";
+          btn.onclick = () => kick(u);
+          li.appendChild(btn);
+        }
         userListEl.appendChild(li);
       }
       // Reset recipient if the current target left
@@ -1142,7 +1192,7 @@ export function getDashboardHTML(): string {
     }
 
     function refreshAgentConfigs() {
-      fetch("/admin-agent-configs", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
+      fetch("/admin-agent-configs", { headers: adminHeaders })
         .then(r => r.json())
         .then(data => {
           agentConfigs.clear();
@@ -1271,9 +1321,9 @@ export function getDashboardHTML(): string {
       for (const img of div.querySelectorAll("img")) {
         img.addEventListener("load", () => { if (atBottom) scrollBottom(); });
       }
-      // Follow new messages only when already at the bottom (or when the operator sent it);
+      // Follow new messages only when already at the bottom (or when you sent it);
       // otherwise remember the first unseen message and offer a jump button
-      if (atBottom || cls.includes("operator")) {
+      if (atBottom || cls.includes("mine")) {
         scrollBottom();
       } else if (!firstUnseenEl && cls.startsWith("message") && !div.classList.contains("hidden-by-filter")) {
         firstUnseenEl = div;
@@ -1411,7 +1461,8 @@ export function getDashboardHTML(): string {
       const memberList = chInfo ? chInfo.members : [];
       const candidates = [];
       for (const [u] of users) {
-        if (selectedChannel !== "#all" && memberList.length > 0 && !memberList.includes(u)) continue;
+        if (u === MY_NAME) continue;
+        if (!isHuman(u) && selectedChannel !== "#all" && memberList.length > 0 && !memberList.includes(u)) continue;
         candidates.push(u);
       }
       return candidates;
@@ -1518,8 +1569,8 @@ export function getDashboardHTML(): string {
         // Start 30s reply expectation timer
         const targetName = target.startsWith("@") ? target.slice(1) : target;
         if (targetName === "all") {
-          for (const [u] of users) { if (u !== "operator") expectReply(u); }
-        } else {
+          for (const [u] of users) { if (!isHuman(u)) expectReply(u); }
+        } else if (!isHuman(targetName)) {
           expectReply(targetName);
         }
       });
@@ -1552,7 +1603,7 @@ export function getDashboardHTML(): string {
     // Filter toggle
     const filterBtn = document.getElementById("filter-btn");
     filterBtn.onclick = () => {
-      document.body.classList.toggle("filter-operator");
+      document.body.classList.toggle("filter-mine");
       filterBtn.classList.toggle("active");
     };
 
@@ -1700,8 +1751,11 @@ export function getDashboardHTML(): string {
 
     function startDashboard() {
       // Fetch initial data
-      fetch("/users").then(r => r.json()).then(data => {
-        for (const u of data.users) users.set(u.name, u.online);
+      const usersLoaded = fetch("/users").then(r => r.json()).then(data => {
+        for (const u of data.users) {
+          users.set(u.name, u.online);
+          if (u.role === "human") humans.add(u.name);
+        }
         renderUsers();
       }).catch(() => {});
 
@@ -1717,7 +1771,7 @@ export function getDashboardHTML(): string {
       refreshAgentConfigs();
 
       // Load unread counts
-      fetch("/admin-unread-counts", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
+      fetch("/admin-unread-counts", { headers: adminHeaders })
         .then(r => r.json())
         .then(data => {
           if (data.counts) {
@@ -1728,14 +1782,14 @@ export function getDashboardHTML(): string {
           }
         }).catch(() => {});
 
-      // Load message history from DB
-      fetch("/admin-channel-history", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
+      // Load message history from DB (after users, so human senders are known)
+      usersLoaded.then(() => fetch("/admin-channel-history", { headers: adminHeaders }))
         .then(r => r.json())
         .then(data => {
           if (data.messages && data.messages.length > 0) {
             clearEmpty();
             for (const msg of data.messages) {
-              const cls = msg.from === "operator" ? "message operator" : "message";
+              const cls = messageClass(msg.from);
               const channelTag = '<span class="channel-tag">' + (msg.channel || "#all") + '</span>';
               addMessage(
                 '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
@@ -1753,7 +1807,7 @@ export function getDashboardHTML(): string {
           markChannelRead("#all");
         }).catch(() => {});
 
-      const es = new EventSource("/events?token=" + encodeURIComponent(ADMIN_TOKEN));
+      const es = new EventSource("/events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
 
       es.onmessage = (e) => {
         const ev = JSON.parse(e.data);
@@ -1765,7 +1819,9 @@ export function getDashboardHTML(): string {
             renderAgents();
           }
         } else if (ev.type === "join") {
-          users.set(ev.name, true);
+          if (ev.role === "human") humans.add(ev.name);
+          // Humans come online when their dashboard connects (a status event follows)
+          users.set(ev.name, ev.role !== "human");
           renderUsers();
           renderAgents();
           refreshChannels();
@@ -1777,6 +1833,7 @@ export function getDashboardHTML(): string {
           );
         } else if (ev.type === "leave") {
           users.delete(ev.name);
+          humans.delete(ev.name);
           renderUsers();
           renderAgents();
           refreshChannels();
@@ -1792,7 +1849,7 @@ export function getDashboardHTML(): string {
           if (users.has(ev.from)) users.set(ev.from, true);
           const existingTimer = typingUsers.get(ev.from);
           if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
-          const cls = ev.from === "operator" ? "message operator" : "message";
+          const cls = messageClass(ev.from, ev.fromRole);
           const channelTag = '<span class="channel-tag">' + (ev.channel || "#all") + '</span>';
           addMessage(
             '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
@@ -1837,7 +1894,7 @@ export function getDashboardHTML(): string {
             ev.channel
           );
         } else if (ev.type === "read_update") {
-          if (ev.userName === "operator") {
+          if (ev.userName === MY_NAME) {
             delete unreadCounts[ev.channel];
             renderChannels();
           }
@@ -1878,63 +1935,84 @@ export function getDashboardHTML(): string {
       };
     }
 
-    // Admin login: the token is never embedded in the page, so ask for it and validate against the Hub
+    // Login: the admin token is never embedded in the page, and each person picks a name.
+    // Both are remembered in this browser, so the dialog only asks for what is missing.
+    const USER_STORAGE_KEY = "walkie-talkie-user-name";
     const loginDialogEl = document.getElementById("login-dialog");
     const loginInputEl = document.getElementById("login-token");
+    const loginNameEl = document.getElementById("login-name");
     const loginErrorEl = document.getElementById("login-error");
+    const loginOperatorBtnEl = document.getElementById("login-as-operator");
+    let loginNeedsToken = false;
+    let loginNeedsName = false;
 
-    function readStoredToken() {
-      try { return localStorage.getItem(TOKEN_STORAGE_KEY) || ""; } catch { return ""; }
+    function readStored(key) {
+      try { return localStorage.getItem(key) || ""; } catch { return ""; }
     }
 
-    function storeToken(token) {
+    function store(key, value) {
       try {
-        if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
-        else localStorage.removeItem(TOKEN_STORAGE_KEY);
+        if (value) localStorage.setItem(key, value);
+        else localStorage.removeItem(key);
       } catch {}
     }
 
-    function tryLogin(token) {
-      return fetch("/admin-unread-counts", { headers: { "Authorization": "Bearer " + token } })
-        .then(r => {
-          if (!r.ok) return false;
+    // Resolves to null on success, or { field, error } describing what to ask for again
+    function tryLogin(token, name) {
+      return fetch("/admin-login", { method: "POST", headers: { "Authorization": "Bearer " + token, "X-Walkie-User": name } })
+        .then(r => r.json().catch(() => ({})).then(data => {
+          if (r.status === 401) return { field: "token", error: "Invalid admin token" };
+          if (!r.ok) return { field: "name", error: data.error || "That name can't be used" };
           ADMIN_TOKEN = token;
-          adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + token };
-          storeToken(token);
+          MY_NAME = name;
+          adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-Walkie-User": name };
+          store(TOKEN_STORAGE_KEY, token);
+          store(USER_STORAGE_KEY, name);
+          document.getElementById("whoami").innerHTML = "Signed in as <strong>" + name + "</strong>";
           loginDialogEl.style.display = "none";
           startDashboard();
-          return true;
-        });
+          return null;
+        }));
     }
 
     function showLogin(error) {
+      document.getElementById("login-token-row").style.display = loginNeedsToken ? "" : "none";
+      document.getElementById("login-name-row").style.display = loginNeedsName ? "" : "none";
+      loginOperatorBtnEl.style.display = loginNeedsName ? "" : "none";
       loginErrorEl.textContent = error || "";
       loginErrorEl.style.display = error ? "" : "none";
       loginDialogEl.style.display = "flex";
-      loginInputEl.focus();
+      (loginNeedsToken ? loginInputEl : loginNameEl).focus();
     }
 
-    function submitLogin() {
-      const token = loginInputEl.value.trim();
-      if (!token) return;
-      tryLogin(token)
-        .then(ok => { if (!ok) showLogin("Invalid admin token"); })
-        .catch(() => showLogin("Could not reach the Hub"));
-    }
-
-    document.getElementById("login-submit").onclick = submitLogin;
-    loginInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
-
-    const storedToken = readStoredToken();
-    if (storedToken) {
-      tryLogin(storedToken)
-        .then(ok => {
-          if (!ok) { storeToken(""); showLogin("Stored admin token was rejected"); }
+    function submitLogin(asName) {
+      const token = loginNeedsToken ? loginInputEl.value.trim() : readStored(TOKEN_STORAGE_KEY);
+      const name = asName || (loginNeedsName ? loginNameEl.value.trim() : readStored(USER_STORAGE_KEY));
+      if (!token || !name) return;
+      tryLogin(token, name)
+        .then(failure => {
+          if (!failure) return;
+          if (failure.field === "token") { store(TOKEN_STORAGE_KEY, ""); loginNeedsToken = true; }
+          else { store(USER_STORAGE_KEY, ""); loginNeedsName = true; }
+          showLogin(failure.error);
         })
         .catch(() => showLogin("Could not reach the Hub"));
-    } else {
-      showLogin();
     }
+
+    document.getElementById("login-submit").onclick = () => submitLogin();
+    loginOperatorBtnEl.onclick = () => submitLogin("operator");
+    loginInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
+    loginNameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
+
+    document.getElementById("switch-user-btn").onclick = () => {
+      store(USER_STORAGE_KEY, "");
+      location.reload();
+    };
+
+    loginNeedsToken = !readStored(TOKEN_STORAGE_KEY);
+    loginNeedsName = !readStored(USER_STORAGE_KEY);
+    if (loginNeedsToken || loginNeedsName) showLogin();
+    else submitLogin();
   </script>
 </body>
 </html>`;

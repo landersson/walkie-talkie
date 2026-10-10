@@ -64,6 +64,8 @@ for m in messages:
 
 for m in messages:
     from_user = m.get('from', '?')
+    if m.get('fromRole') == 'human':
+        from_user += ' (human)'
     to_user = m.get('to', '?')
     content = m.get('content', '')
     channel = m.get('channel', '#all')

@@ -133,6 +133,7 @@ export class HubClient {
     messages: Array<{
       id: string;
       from: string;
+      fromRole?: string;
       to: string;
       content: string;
       channel: string;
@@ -144,6 +145,7 @@ export class HubClient {
       messages: Array<{
         id: string;
         from: string;
+        fromRole?: string;
         to: string;
         content: string;
         channel: string;
@@ -167,6 +169,7 @@ export class HubClient {
     messages: Array<{
       id: string;
       from: string;
+      fromRole?: string;
       to: string;
       content: string;
       channel: string;
@@ -178,6 +181,7 @@ export class HubClient {
       messages: Array<{
         id: string;
         from: string;
+        fromRole?: string;
         to: string;
         content: string;
         channel: string;
@@ -195,8 +199,8 @@ export class HubClient {
     return res.data;
   }
 
-  async users(token: string): Promise<string[]> {
-    const res = await this.request<{ users: string[] }>({
+  async users(token: string): Promise<Array<{ name: string; online: boolean; role: string }>> {
+    const res = await this.request<{ users: Array<{ name: string; online: boolean; role: string }> }>({
       method: "GET",
       path: "/users",
       token,

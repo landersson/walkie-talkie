@@ -44,6 +44,54 @@ import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, removeQueue,
 import type { RegisterRequest, RouteHandler, SendRequest } from "./types.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+const HUMAN_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
+const RESERVED_NAMES = new Set(["system", "slack"]);
+const DEFAULT_HUMAN = "operator";
+
+// Open dashboard event streams per human; a human is online while at least one is open
+const humanConnections = new Map<string, number>();
+
+/**
+ * Register `name` as a human user if needed.
+ * Returns an HTTP error when the name is invalid or already held by an agent/bridge.
+ */
+function ensureHuman(name: string): { status: number; error: string } | null {
+  if (!HUMAN_NAME_RE.test(name) || RESERVED_NAMES.has(name)) {
+    return { status: 400, error: `Invalid name "${name}" (use letters, digits, - or _, max 32)` };
+  }
+  const role = getUserRole(name);
+  if (role === "human") return null;
+  if (role) {
+    return { status: 409, error: `Name "${name}" is already used by ${role === "agent" ? "an agent" : "a bridge"}` };
+  }
+  registerUser(name, "human");
+  if (!humanConnections.get(name)) setOffline(name);
+  broadcast({ type: "join", name, role: "human", timestamp: Date.now() });
+  console.log(`[human] ${name}`);
+  return null;
+}
+
+function connectHuman(name: string): void {
+  const count = (humanConnections.get(name) ?? 0) + 1;
+  humanConnections.set(name, count);
+  if (count === 1) {
+    setOnline(name);
+    broadcast({ type: "status", name, online: true, timestamp: Date.now() });
+  }
+}
+
+function disconnectHuman(name: string): void {
+  const count = (humanConnections.get(name) ?? 1) - 1;
+  if (count > 0) {
+    humanConnections.set(name, count);
+    return;
+  }
+  humanConnections.delete(name);
+  if (getUserRole(name) === "human") {
+    setOffline(name);
+    broadcast({ type: "status", name, online: false, timestamp: Date.now() });
+  }
+}
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -107,7 +155,7 @@ const handleRegister: RouteHandler = async (req, res) => {
         /* channel may no longer exist */
       }
     }
-    broadcast({ type: "join", name: body.name, timestamp: Date.now() });
+    broadcast({ type: "join", name: body.name, role, timestamp: Date.now() });
     console.log(`[register] ${body.name}`);
 
     if (role === "agent") {
@@ -156,6 +204,7 @@ const handleSend: RouteHandler = async (req, res, userName) => {
       channel: message.channel,
       timestamp: message.timestamp,
       image: message.image,
+      fromRole: message.fromRole,
     });
     console.log(`[send] ${userName} -> ${body.to} (${channel}): ${content}${body.image ? " [+image]" : ""}`);
     sendJson(res, 200, { id: message.id, to: message.to });
@@ -229,6 +278,9 @@ const handleKick: RouteHandler = async (req, res) => {
   if (!body.name) {
     return sendError(res, 400, "Missing 'name' field");
   }
+  if (getUserRole(body.name) === "human") {
+    return sendError(res, 400, `"${body.name}" is a human and cannot be kicked`);
+  }
   if (kickUser(body.name)) {
     sendJson(res, 200, { ok: true, kicked: body.name });
   } else {
@@ -237,49 +289,31 @@ const handleKick: RouteHandler = async (req, res) => {
 };
 
 const handleKickAll: RouteHandler = async (_req, res) => {
-  const agents = [...getRegisteredUsers()].filter((name) => name !== "operator");
+  const agents = [...getRegisteredUsers()].filter((name) => getUserRole(name) !== "human");
   for (const name of agents) {
     kickUser(name);
   }
   sendJson(res, 200, { ok: true, kicked: agents });
 };
 
-const handleAdminSend: RouteHandler = async (req, res) => {
+const handleAdminLogin: RouteHandler = async (_req, res, userName) => {
+  // The caller's name was already validated and registered by the admin route guard
+  sendJson(res, 200, { ok: true, name: userName });
+};
+
+const handleAdminSend: RouteHandler = async (req, res, userName) => {
   const body = JSON.parse(await readBody(req)) as {
-    from?: string;
     to?: string;
     content?: string;
     channel?: string;
     image?: { data: string; mimeType: string };
   };
-  const from = body.from || "operator";
+  const from = userName!;
   if (!body.to || (!body.content && !body.image)) {
     return sendError(res, 400, "Missing 'to' or 'content' field");
   }
   const content = body.content || "";
   const channel = body.channel || "#all";
-  // Auto-register the admin sender so agents can reply
-  if (!isUserRegistered(from)) {
-    try {
-      registerUser(from);
-      ensureQueue(from);
-      try {
-        joinChannel("#all", from);
-      } catch {
-        /* already joined */
-      }
-      broadcast({ type: "join", name: from, timestamp: Date.now() });
-      console.log(`[auto-register] ${from}`);
-    } catch {
-      /* already registered */
-    }
-  }
-  // Ensure operator is in target channel
-  try {
-    joinChannel(channel, from);
-  } catch {
-    /* already joined or channel issue */
-  }
   try {
     const message = routeMessage(from, body.to, content, channel, body.image);
     broadcast({
@@ -290,6 +324,7 @@ const handleAdminSend: RouteHandler = async (req, res) => {
       channel: message.channel,
       timestamp: message.timestamp,
       image: message.image,
+      fromRole: message.fromRole,
     });
     console.log(`[admin-send] ${from} -> ${body.to} (${channel}): ${content}${body.image ? " [+image]" : ""}`);
     sendJson(res, 200, { id: message.id, to: message.to });
@@ -402,7 +437,7 @@ const handleChannelHistory: RouteHandler = async (req, res, userName) => {
   sendJson(res, 200, { messages });
 };
 
-const handleAdminChannelCreate: RouteHandler = async (req, res) => {
+const handleAdminChannelCreate: RouteHandler = async (req, res, userName) => {
   const body = JSON.parse(await readBody(req)) as { name?: string };
   if (!body.name || typeof body.name !== "string") {
     return sendError(res, 400, "Missing or invalid 'name' field");
@@ -412,7 +447,7 @@ const handleAdminChannelCreate: RouteHandler = async (req, res) => {
     return sendError(res, 409, `Channel "${channelName}" already exists`);
   }
   try {
-    dbCreateChannel(channelName, "operator");
+    dbCreateChannel(channelName, userName!);
     ensureChannelMembership(channelName);
     broadcast({ type: "channel_create", name: channelName, timestamp: Date.now() });
     console.log(`[admin-channel-create] ${channelName}`);
@@ -455,19 +490,19 @@ const handleAdminChannelDelete: RouteHandler = async (req, res) => {
   sendJson(res, 200, { ok: true, channel: body.name });
 };
 
-const handleAdminMarkRead: RouteHandler = async (req, res) => {
+const handleAdminMarkRead: RouteHandler = async (req, res, userName) => {
   const body = JSON.parse(await readBody(req)) as { channel?: string; timestamp?: number };
   if (!body.channel || typeof body.channel !== "string") {
     return sendError(res, 400, "Missing or invalid 'channel' field");
   }
   const ts = body.timestamp ?? Date.now();
-  dbUpdateReadCursor("operator", body.channel, ts);
-  broadcast({ type: "read_update", userName: "operator", channel: body.channel, timestamp: ts });
+  dbUpdateReadCursor(userName!, body.channel, ts);
+  broadcast({ type: "read_update", userName: userName!, channel: body.channel, timestamp: ts });
   sendJson(res, 200, { ok: true });
 };
 
-const handleAdminUnreadCounts: RouteHandler = async (_req, res) => {
-  const counts = dbGetUnreadCounts("operator");
+const handleAdminUnreadCounts: RouteHandler = async (_req, res, userName) => {
+  const counts = dbGetUnreadCounts(userName!);
   sendJson(res, 200, { counts });
 };
 
@@ -602,6 +637,7 @@ const joinRoutes: Record<string, { method: string; handler: RouteHandler }> = {
 };
 
 const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
+  "/admin-login": { method: "POST", handler: handleAdminLogin },
   "/kick": { method: "POST", handler: handleKick },
   "/kick-all": { method: "POST", handler: handleKickAll },
   "/admin-send": { method: "POST", handler: handleAdminSend },
@@ -692,7 +728,14 @@ export function createHubServer(
         sendError(res, 401, "Unauthorized");
         return;
       }
-      addSSEClient(res);
+      const humanName = url.searchParams.get("name") || DEFAULT_HUMAN;
+      const humanError = ensureHuman(humanName);
+      if (humanError) {
+        sendError(res, humanError.status, humanError.error);
+        return;
+      }
+      addSSEClient(res, () => disconnectHuman(humanName));
+      connectHuman(humanName);
       return;
     }
 
@@ -737,7 +780,15 @@ export function createHubServer(
         sendError(res, 401, "Admin token required");
         return;
       }
-      adminRoute.handler(req, res).catch((e) => {
+      // The dashboard identifies which human is acting; plain admin-token callers act as "operator"
+      const callerHeader = req.headers["x-walkie-user"];
+      const caller = (typeof callerHeader === "string" && callerHeader.trim()) || DEFAULT_HUMAN;
+      const callerError = ensureHuman(caller);
+      if (callerError) {
+        sendError(res, callerError.status, callerError.error);
+        return;
+      }
+      adminRoute.handler(req, res, caller).catch((e) => {
         sendError(res, 500, (e as Error).message);
       });
       return;

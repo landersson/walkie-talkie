@@ -9,8 +9,9 @@ export type HubEvent =
       channel: string;
       timestamp: number;
       image?: { data: string; mimeType: string };
+      fromRole?: "agent" | "bridge" | "human";
     }
-  | { type: "join"; name: string; timestamp: number }
+  | { type: "join"; name: string; role?: "agent" | "bridge" | "human"; timestamp: number }
   | { type: "leave"; name: string; timestamp: number }
   | { type: "channel_create"; name: string; timestamp: number }
   | { type: "channel_join"; channel: string; userName: string; timestamp: number }
@@ -44,7 +45,7 @@ function stopHeartbeat(): void {
   }
 }
 
-export function addSSEClient(res: ServerResponse): void {
+export function addSSEClient(res: ServerResponse, onClose?: () => void): void {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -56,6 +57,7 @@ export function addSSEClient(res: ServerResponse): void {
   res.on("close", () => {
     clients.delete(res);
     stopHeartbeat();
+    onClose?.();
   });
 }
 

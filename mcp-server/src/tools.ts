@@ -15,6 +15,11 @@ const MIME_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
+// Humans (dashboard users) are marked so agents know whose instructions to act on
+function senderLabel(m: { from: string; fromRole?: string }): string {
+  return m.fromRole === "human" ? `${m.from} (human)` : m.from;
+}
+
 function getMimeType(source: string): string {
   const ext = path.extname(source).toLowerCase();
   return MIME_TYPES[ext] ?? "image/png";
@@ -216,7 +221,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
             });
           }
           const imageTag = m.image ? " [image attached]" : "";
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from} → ${m.to}: ${m.content}${imageTag}`;
+          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text" as const, text: line });
         }
         const channels = [
@@ -283,7 +288,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
             });
           }
           const imageTag = m.image ? " [image attached]" : "";
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from} → ${m.to}: ${m.content}${imageTag}`;
+          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text" as const, text: line });
         }
 
@@ -337,7 +342,15 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       }
       try {
         const [users, channels] = await Promise.all([client.users(currentToken), client.listChannels(currentToken)]);
-        const userText = users.length > 0 ? `Connected users: ${users.join(", ")}` : "No users connected.";
+        const userText =
+          users.length > 0
+            ? `Connected users: ${users
+                .map((u) => {
+                  const tags = [u.role === "human" ? "human" : "", u.online ? "" : "offline"].filter(Boolean);
+                  return tags.length > 0 ? `${u.name} (${tags.join(", ")})` : u.name;
+                })
+                .join(", ")}`
+            : "No users connected.";
         const channelText =
           channels.length > 0
             ? `Channels: ${channels.map((c) => `${c.name} (${c.memberCount} members)`).join(", ")}`

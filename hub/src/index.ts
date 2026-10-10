@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { getRegisteredUsers } from "./auth.js";
+import { getRegisteredUsers, getUserRole } from "./auth.js";
 import { initGeneralChannel } from "./channels.js";
 import { initDB } from "./db.js";
 import { closeAllSSEClients } from "./events.js";
@@ -49,6 +49,7 @@ function handleShutdown(): void {
   console.log("\n[shutdown] Notifying connected users...");
   // Send RADIO_KILLED to all connected users so they disconnect gracefully
   for (const name of getRegisteredUsers()) {
+    if (getUserRole(name) === "human") continue;
     ensureQueue(name);
     enqueueAndDeliver(name, {
       id: randomUUID(),
