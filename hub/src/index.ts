@@ -1,13 +1,9 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { getRegisteredUsers, getUserRole } from "./auth.js";
 import { initGeneralChannel } from "./channels.js";
 import { initDB } from "./db.js";
 import { closeAllSSEClients } from "./events.js";
 import { autoLaunchAgents } from "./launcher.js";
-import { closeAllPolls } from "./polling.js";
-import { enqueueAndDeliver, ensureQueue } from "./router.js";
-import { createHubServer } from "./server.js";
+import { createHubServer, prepareShutdown } from "./server.js";
 
 const port = parseInt(process.env.PORT ?? "9559", 10);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -37,31 +33,21 @@ server.on("listening", () => {
   autoLaunchAgents();
 });
 
-// Graceful shutdown
+// Graceful shutdown. SIGTERM (e.g. systemctl restart/stop) is treated as a restart: agents
+// get RADIO_RESTART and keep their sessions for when the hub comes back. SIGINT (Ctrl+C)
+// stops the hub for good: agents get RADIO_KILLED and their sessions are dropped.
 let shuttingDown = false;
-function handleShutdown(): void {
+function handleShutdown(signal: NodeJS.Signals): void {
   if (shuttingDown) return;
   shuttingDown = true;
   // Restore terminal to cooked mode if it was set to raw
   if (process.stdin.isTTY && process.stdin.isRaw) {
     process.stdin.setRawMode(false);
   }
-  console.log("\n[shutdown] Notifying connected users...");
-  // Send RADIO_KILLED to all connected users so they disconnect gracefully
-  for (const name of getRegisteredUsers()) {
-    if (getUserRole(name) === "human") continue;
-    ensureQueue(name);
-    enqueueAndDeliver(name, {
-      id: randomUUID(),
-      from: "system",
-      to: name,
-      content: "RADIO_KILLED: Hub is shutting down.",
-      channel: "#all",
-      timestamp: Date.now(),
-    });
-  }
+  const mode = signal === "SIGINT" ? "stop" : "restart";
+  console.log(`\n[shutdown] ${signal}: notifying connected users (${mode})...`);
+  prepareShutdown(mode);
   closeAllSSEClients();
-  closeAllPolls();
   server.close(() => {
     console.log("[shutdown] Hub stopped.");
     process.exit(0);

@@ -7,6 +7,7 @@ import {
   getUserToken,
   isUserRegistered,
   registerUser,
+  restoreUser,
   unregisterUser,
 } from "./auth.js";
 import {
@@ -23,6 +24,7 @@ import {
   dbCreateAgentConfig,
   dbCreateChannel,
   dbDeleteAgentConfig,
+  dbDeleteAllSessions,
   dbDeleteChannel,
   dbDeleteChannelMessages,
   dbDeleteReadCursorsForChannel,
@@ -34,14 +36,25 @@ import {
   dbGetUserChannels,
   dbListAgentConfigs,
   dbListChannels,
+  dbListSessions,
+  dbSavePendingMessages,
+  dbTakePendingMessages,
   dbUpdateAgentConfig,
   dbUpdateReadCursor,
 } from "./db.js";
 import { addSSEClient, broadcast } from "./events.js";
 import { launchAgent } from "./launcher.js";
-import { addPoll, isOnline, onPollDisconnect, removePoll, setOffline, setOnline } from "./polling.js";
-import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, removeQueue, routeMessage } from "./router.js";
-import type { RegisterRequest, RouteHandler, SendRequest } from "./types.js";
+import { addPoll, closeAllPolls, isOnline, onPollDisconnect, removePoll, setOffline, setOnline } from "./polling.js";
+import {
+  drainQueue,
+  enqueueAndDeliver,
+  ensureQueue,
+  getAllQueues,
+  notifyBridges,
+  removeQueue,
+  routeMessage,
+} from "./router.js";
+import type { RegisterRequest, RouteHandler, SendRequest, UserRole } from "./types.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 const HUMAN_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
@@ -679,7 +692,99 @@ function authenticateBearer(req: IncomingMessage, expected: string): boolean {
 }
 
 const STALE_GRACE_MS = 30_000; // 30 seconds before auto-unregister
+const RESTORE_GRACE_MS = 120_000; // time for agents to come back after a hub restart
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Unregister `userName` unless it polls again (= comes back online) within `graceMs`. */
+function scheduleStaleRemoval(userName: string, graceMs: number): void {
+  const existing = staleTimers.get(userName);
+  if (existing) clearTimeout(existing);
+
+  staleTimers.set(
+    userName,
+    setTimeout(() => {
+      staleTimers.delete(userName);
+      if (isUserRegistered(userName) && !isOnline(userName)) {
+        const role = getUserRole(userName);
+        removePoll(userName);
+        removeQueue(userName);
+        setOffline(userName);
+        unregisterUser(userName);
+        broadcast({ type: "leave", name: userName, timestamp: Date.now() });
+        if (role === "agent") {
+          notifyBridges(`USER_LEFT: ${userName}`);
+        }
+        console.log(`[auto-unregister] ${userName} (stale)`);
+      }
+    }, graceMs),
+  );
+}
+
+/**
+ * Bring back agent/bridge sessions (and their undelivered messages) saved before the last
+ * shutdown, so they can carry on with their old token. They start offline and are removed
+ * if they don't poll again within RESTORE_GRACE_MS.
+ */
+function restoreSessions(): void {
+  const pending = dbTakePendingMessages();
+  for (const session of dbListSessions()) {
+    if (isUserRegistered(session.name)) continue;
+    restoreUser({
+      name: session.name,
+      token: session.token,
+      role: session.role as UserRole,
+      registeredAt: session.registered_at,
+    });
+    ensureQueue(session.name);
+    setOffline(session.name);
+    for (const ch of new Set(["#all", ...dbGetUserChannels(session.name)])) {
+      try {
+        joinChannel(ch, session.name);
+      } catch {
+        /* channel may no longer exist */
+      }
+    }
+    for (const message of pending.get(session.name) ?? []) {
+      enqueueAndDeliver(session.name, message);
+    }
+    scheduleStaleRemoval(session.name, RESTORE_GRACE_MS);
+    console.log(`[restore] ${session.name}`);
+  }
+}
+
+/**
+ * Tell agents and bridges the hub is going away and end all open polls.
+ * "restart": sessions and undelivered messages are kept for the next start (RADIO_RESTART).
+ * "stop": everyone is disconnected and sessions are dropped (RADIO_KILLED).
+ */
+export function prepareShutdown(mode: "restart" | "stop"): void {
+  const content =
+    mode === "restart"
+      ? "RADIO_RESTART: The hub is restarting and should be back within a few seconds. You stay on the air with your current session: keep calling radio_standby, and if it fails, wait a few seconds and try again. Do not call radio_join or radio_out. If the hub is still unreachable after a few minutes, stop and tell the user."
+      : "RADIO_KILLED: Hub is shutting down.";
+  for (const name of getRegisteredUsers()) {
+    if (getUserRole(name) === "human") continue;
+    ensureQueue(name);
+    enqueueAndDeliver(name, {
+      id: randomUUID(),
+      from: "system",
+      to: name,
+      content,
+      channel: "#all",
+      timestamp: Date.now(),
+    });
+  }
+  if (mode === "restart") {
+    // Keep what agents haven't picked up yet, except the restart notice itself
+    for (const [name, messages] of getAllQueues()) {
+      const keep = messages.filter((m) => !(m.from === "system" && m.content.startsWith("RADIO_RESTART:")));
+      if (keep.length > 0 && getUserRole(name) !== "human") dbSavePendingMessages(name, keep);
+    }
+  } else {
+    dbDeleteAllSessions();
+  }
+  closeAllPolls();
+}
 
 export function createHubServer(
   port: number,
@@ -693,30 +798,10 @@ export function createHubServer(
     setOffline(userName);
     broadcast({ type: "status", name: userName, online: false, timestamp: Date.now() });
     console.log(`[offline] ${userName} (grace period ${STALE_GRACE_MS / 1000}s)`);
-
-    // Clear any existing grace timer
-    const existing = staleTimers.get(userName);
-    if (existing) clearTimeout(existing);
-
-    staleTimers.set(
-      userName,
-      setTimeout(() => {
-        staleTimers.delete(userName);
-        if (isUserRegistered(userName) && !isOnline(userName)) {
-          const role = getUserRole(userName);
-          removePoll(userName);
-          removeQueue(userName);
-          setOffline(userName);
-          unregisterUser(userName);
-          broadcast({ type: "leave", name: userName, timestamp: Date.now() });
-          if (role === "agent") {
-            notifyBridges(`USER_LEFT: ${userName}`);
-          }
-          console.log(`[auto-unregister] ${userName} (stale)`);
-        }
-      }, STALE_GRACE_MS),
-    );
+    scheduleStaleRemoval(userName, STALE_GRACE_MS);
   });
+
+  restoreSessions();
 
   function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);

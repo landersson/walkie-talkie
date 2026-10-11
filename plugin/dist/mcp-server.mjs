@@ -30099,6 +30099,11 @@ var EMPTY_COMPLETION_RESULT = {
 // mcp-server/src/client.ts
 import http from "node:http";
 import https from "node:https";
+var CONNECT_RETRY_MS = 15e3;
+function isHubUnreachable(e) {
+  const code = e?.code;
+  return code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE" || code === "EHOSTUNREACH";
+}
 var HubClient = class {
   baseUrl;
   constructor(hubUrl2) {
@@ -30107,7 +30112,18 @@ var HubClient = class {
   getBaseUrl() {
     return this.baseUrl.toString().replace(/\/$/, "");
   }
-  request(options) {
+  async request(options) {
+    const deadline = Date.now() + (options.retryConnectMs ?? CONNECT_RETRY_MS);
+    for (; ; ) {
+      try {
+        return await this.requestOnce(options);
+      } catch (e) {
+        if (e.code !== "ECONNREFUSED" || Date.now() >= deadline) throw e;
+        await new Promise((resolve) => setTimeout(resolve, 1e3));
+      }
+    }
+  }
+  requestOnce(options) {
     return new Promise((resolve, reject) => {
       const isHttps = this.baseUrl.protocol === "https:";
       const transport2 = isHttps ? https : http;
@@ -30201,8 +30217,10 @@ var HubClient = class {
       method: "GET",
       path: `/poll?timeout=${timeoutSec}`,
       token,
-      timeoutMs: (timeoutSec + 60) * 1e3
+      timeoutMs: (timeoutSec + 60) * 1e3,
       // hub ends the poll first; 60 s margin
+      retryConnectMs: 0
+      // radio_standby handles reconnecting itself
     });
     if (res.status === 204) return null;
     if (res.status !== 200) {
@@ -30336,6 +30354,47 @@ function takeStashed() {
 }
 var STANDBY_DEFAULT_SECONDS = 600;
 var STANDBY_PROGRESS_INTERVAL_MS = 3e4;
+var RECONNECT_DELAY_MS = 1e3;
+var standbyGeneration = 0;
+function isRestartNotice(m) {
+  return m.from === "system" && m.content.startsWith("RADIO_RESTART:");
+}
+async function waitForMessages(timeoutSec, signal) {
+  const deadline = Date.now() + timeoutSec * 1e3;
+  const generation = ++standbyGeneration;
+  let reconnecting = false;
+  while (!signal.aborted && generation === standbyGeneration) {
+    const remainingSec = Math.ceil((deadline - Date.now()) / 1e3);
+    if (remainingSec <= 0) break;
+    try {
+      const result = await client.poll(currentToken, remainingSec);
+      if (reconnecting) console.error("[walkie-talkie] Reconnected to the hub");
+      reconnecting = false;
+      const messages = (result?.messages ?? []).filter((m) => !isRestartNotice(m));
+      if (messages.length > 0) return messages;
+      if (result && result.messages.length > 0) {
+        console.error("[walkie-talkie] Hub is restarting, waiting for it to come back");
+        reconnecting = true;
+        continue;
+      }
+      if (!result && Date.now() < deadline - 1e3) continue;
+      break;
+    } catch (e) {
+      if (isHubUnreachable(e)) {
+        reconnecting = true;
+      } else if (e.message === "Unauthorized" && reconnecting && currentName) {
+        const reg = await client.register(currentName, joinToken, currentToken ?? void 0);
+        currentToken = reg.token;
+        console.error(`[walkie-talkie] Re-registered as "${reg.name}" after hub restart`);
+        continue;
+      } else {
+        throw e;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(RECONNECT_DELAY_MS, deadline - Date.now())));
+    }
+  }
+  return reconnecting ? "unreachable" : [];
+}
 function createMcpServer(hubUrl2, joinTok) {
   client = new HubClient(hubUrl2);
   joinToken = joinTok;
@@ -30461,7 +30520,7 @@ function createMcpServer(hubUrl2, joinTok) {
       }
       try {
         const inbox = await client.inbox(currentToken);
-        const result = { messages: [...takeStashed(), ...inbox.messages] };
+        const result = { messages: [...takeStashed(), ...inbox.messages].filter((m) => !isRestartNotice(m)) };
         if (result.messages.length === 0) {
           return {
             content: [{ type: "text", text: "No new messages." }]
@@ -30545,11 +30604,23 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
             }).catch(() => {
             });
           }, STANDBY_PROGRESS_INTERVAL_MS);
+          let waited;
           try {
-            result = await client.poll(currentToken, timeout_seconds ?? STANDBY_DEFAULT_SECONDS);
+            waited = await waitForMessages(timeout_seconds ?? STANDBY_DEFAULT_SECONDS, extra.signal);
           } finally {
             clearInterval(progressTimer);
           }
+          if (waited === "unreachable") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `The hub at ${client.getBaseUrl()} is unreachable (restarting or down). You are still on the air: call radio_standby again to keep waiting.`
+                }
+              ]
+            };
+          }
+          result = { messages: waited };
           if (extra.signal.aborted && result && result.messages.length > 0) {
             stashedMessages.push(...result.messages);
             return { content: [{ type: "text", text: "Cancelled." }] };

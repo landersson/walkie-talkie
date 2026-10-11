@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { removeUserFromAllChannels } from "./channels.js";
+import { dbDeleteSession, dbSaveSession } from "./db.js";
 import type { User, UserRole } from "./types.js";
 
 const users = new Map<string, User>();
@@ -18,7 +19,15 @@ export function registerUser(name: string, role: UserRole = "agent"): User {
   const user: User = { name, token, role, registeredAt: Date.now() };
   users.set(name, user);
   tokenToName.set(token, name);
+  // Agents and bridges keep their token across hub restarts; humans re-register on reconnect
+  if (role !== "human") dbSaveSession(name, token, role, user.registeredAt);
   return user;
+}
+
+/** Re-adds a session saved before a hub restart (see dbListSessions). */
+export function restoreUser(user: User): void {
+  users.set(user.name, user);
+  tokenToName.set(user.token, user.name);
 }
 
 export function unregisterUser(name: string): void {
@@ -26,6 +35,7 @@ export function unregisterUser(name: string): void {
   if (user) {
     tokenToName.delete(user.token);
     users.delete(name);
+    dbDeleteSession(name);
     removeUserFromAllChannels(name);
   }
 }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HubClient } from "./client.js";
+import { HubClient, isHubUnreachable } from "./client.js";
 
 const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -66,6 +66,60 @@ function takeStashed(): PolledMessage[] {
 
 const STANDBY_DEFAULT_SECONDS = 600;
 const STANDBY_PROGRESS_INTERVAL_MS = 30_000;
+const RECONNECT_DELAY_MS = 1000;
+// Only the newest radio_standby call keeps polling; an older one still running (e.g. moved to
+// the background) gives up, so the two don't keep ending each other's polls on the hub.
+let standbyGeneration = 0;
+
+// The hub announces a restart with a RADIO_RESTART system message. The plugin handles it
+// (keeps waiting and reconnects), so the agent never sees it.
+function isRestartNotice(m: { from: string; content: string }): boolean {
+  return m.from === "system" && m.content.startsWith("RADIO_RESTART:");
+}
+
+/**
+ * Wait for messages until one arrives or `timeoutSec` has passed. Rides out hub restarts:
+ * retries while the hub is unreachable, and re-registers under the same name if the hub
+ * came back without our session.
+ */
+async function waitForMessages(timeoutSec: number, signal: AbortSignal): Promise<PolledMessage[] | "unreachable"> {
+  const deadline = Date.now() + timeoutSec * 1000;
+  const generation = ++standbyGeneration;
+  let reconnecting = false;
+  while (!signal.aborted && generation === standbyGeneration) {
+    const remainingSec = Math.ceil((deadline - Date.now()) / 1000);
+    if (remainingSec <= 0) break;
+    try {
+      const result = await client.poll(currentToken!, remainingSec);
+      if (reconnecting) console.error("[walkie-talkie] Reconnected to the hub");
+      reconnecting = false;
+      const messages = (result?.messages ?? []).filter((m) => !isRestartNotice(m));
+      if (messages.length > 0) return messages;
+      if (result && result.messages.length > 0) {
+        console.error("[walkie-talkie] Hub is restarting, waiting for it to come back");
+        reconnecting = true;
+        continue;
+      }
+      // An empty poll before the deadline means the hub ended it early (e.g. shutting down)
+      if (!result && Date.now() < deadline - 1000) continue;
+      break;
+    } catch (e) {
+      if (isHubUnreachable(e)) {
+        reconnecting = true;
+      } else if ((e as Error).message === "Unauthorized" && reconnecting && currentName) {
+        // The hub came back without our session: take our name again
+        const reg = await client.register(currentName, joinToken, currentToken ?? undefined);
+        currentToken = reg.token;
+        console.error(`[walkie-talkie] Re-registered as "${reg.name}" after hub restart`);
+        continue;
+      } else {
+        throw e;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(RECONNECT_DELAY_MS, deadline - Date.now())));
+    }
+  }
+  return reconnecting ? "unreachable" : [];
+}
 
 export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   client = new HubClient(hubUrl);
@@ -206,7 +260,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       }
       try {
         const inbox = await client.inbox(currentToken);
-        const result = { messages: [...takeStashed(), ...inbox.messages] };
+        const result = { messages: [...takeStashed(), ...inbox.messages].filter((m) => !isRestartNotice(m)) };
         if (result.messages.length === 0) {
           return {
             content: [{ type: "text" as const, text: "No new messages." }],
@@ -302,11 +356,23 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
                     })
                     .catch(() => {});
                 }, STANDBY_PROGRESS_INTERVAL_MS);
+          let waited: PolledMessage[] | "unreachable";
           try {
-            result = await client.poll(currentToken, timeout_seconds ?? STANDBY_DEFAULT_SECONDS);
+            waited = await waitForMessages(timeout_seconds ?? STANDBY_DEFAULT_SECONDS, extra.signal);
           } finally {
             clearInterval(progressTimer);
           }
+          if (waited === "unreachable") {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `The hub at ${client.getBaseUrl()} is unreachable (restarting or down). You are still on the air: call radio_standby again to keep waiting.`,
+                },
+              ],
+            };
+          }
+          result = { messages: waited };
           // The client gave up on this call: keep the messages for the next call instead of losing them
           if (extra.signal.aborted && result && result.messages.length > 0) {
             stashedMessages.push(...result.messages);

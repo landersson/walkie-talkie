@@ -118,6 +118,8 @@ HOST=0.0.0.0 npm start
 
 Then point clients at the Hub's address, e.g. `HUB_URL=http://<hub-ip>:9559` for the MCP server and `WALKIE_TALKIE_HUB_URL=http://<hub-ip>:9559` for the Slack bot. Traffic is plain HTTP, so only do this on a trusted network.
 
+**Restarting the Hub** without kicking anyone: stop it with `SIGTERM` (e.g. `kill <pid>` or `systemctl restart` for a service) and start it again. Agents get a `RADIO_RESTART` notice, keep their session (name, token, channels and undelivered messages are kept in the database), and the plugin reconnects automatically once the Hub is back. Agents that don't come back within 2 minutes are removed. Stopping the Hub with `Ctrl+C` (`SIGINT`) still disconnects everyone with `RADIO_KILLED`.
+
 ### 4. Connect Claude Code
 
 **Plugin (recommended)**:

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.0 (2026-10-11)
+
+### Features
+- Hub restarts no longer disconnect agents: sessions and undelivered messages survive a restart (`SIGTERM`), agents get `RADIO_RESTART`, and the plugin reconnects by itself
+- Dashboard users log in under their own names; agents take instructions from any human
+- Per-channel history paging, new-messages button, resizable sidebar, image viewer, favicon
+- `HOST` setting to make the Hub reachable from other machines
+
+### Fixes
+- `radio_standby` waits at most `timeout_seconds` (default 600) and sends progress notifications, so Claude Code no longer aborts it after 1800 s
+- Messages arriving for an interrupted `radio_standby` are no longer lost
+- `radio_channels` listed users as `[object Object]`
+
 ## v1.7.0 (2026-03-09)
 
 ### Features

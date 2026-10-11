@@ -14,7 +14,8 @@ if [ -z "$HUB_URL" ] || [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-MAX_RETRIES=3
+# Connection retries every 5 s; 36 = ride out up to 3 minutes of hub restart/downtime
+MAX_RETRIES=36
 retry_count=0
 
 while true; do
@@ -36,6 +37,8 @@ while true; do
 
   case "$http_code" in
     200)
+      retry_count=0
+      py_exit=0
       # Parse JSON and format messages using python3 (macOS built-in)
       echo "$body" | python3 -c "
 import sys, json, os, base64, tempfile, datetime
@@ -53,7 +56,9 @@ except (json.JSONDecodeError, ValueError):
     print('ERROR: Invalid JSON response', file=sys.stderr)
     sys.exit(1)
 
-messages = data.get('messages', [])
+# The hub announces restarts with RADIO_RESTART; this script just keeps polling through them
+messages = [m for m in data.get('messages', [])
+            if not (m.get('from') == 'system' and m.get('content', '').startswith('RADIO_RESTART:'))]
 if not messages:
     sys.exit(2)
 
@@ -89,8 +94,7 @@ for m in messages:
         image_info = f' [image: {path}]'
 
     print(f'[{time_str}] {channel} {from_user} -> {to_user}: {content}{image_info}')
-"
-      py_exit=$?
+" || py_exit=$?
       case "$py_exit" in
         0) exit 0 ;;       # Messages printed successfully
         2) continue ;;     # Empty messages, retry poll

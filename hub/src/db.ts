@@ -79,6 +79,24 @@ export function initDB(): void {
     )
   `);
 
+  // Agent/bridge sessions and their undelivered messages, kept across hub restarts
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      name TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      role TEXT NOT NULL,
+      registered_at INTEGER NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_messages (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_name TEXT NOT NULL,
+      message TEXT NOT NULL
+    )
+  `);
+
   try {
     db.exec("ALTER TABLE agent_configs ADD COLUMN env_vars TEXT");
   } catch {
@@ -321,4 +339,59 @@ function dbPruneAllChannel(): void {
       )`,
     ).run(ALL_CHANNEL_MAX);
   }
+}
+
+// --- Sessions (survive hub restarts) ---
+
+export interface SessionRow {
+  name: string;
+  token: string;
+  role: string;
+  registered_at: number;
+}
+
+export function dbSaveSession(name: string, token: string, role: string, registeredAt: number): void {
+  db.prepare("INSERT OR REPLACE INTO sessions (name, token, role, registered_at) VALUES (?, ?, ?, ?)").run(
+    name,
+    token,
+    role,
+    registeredAt,
+  );
+}
+
+export function dbDeleteSession(name: string): void {
+  db.prepare("DELETE FROM sessions WHERE name = ?").run(name);
+}
+
+export function dbDeleteAllSessions(): void {
+  db.prepare("DELETE FROM sessions").run();
+}
+
+export function dbListSessions(): SessionRow[] {
+  return db
+    .prepare("SELECT name, token, role, registered_at FROM sessions ORDER BY registered_at")
+    .all() as SessionRow[];
+}
+
+export function dbSavePendingMessages(userName: string, messages: Message[]): void {
+  const insert = db.prepare("INSERT INTO pending_messages (user_name, message) VALUES (?, ?)");
+  db.transaction(() => {
+    for (const m of messages) insert.run(userName, JSON.stringify(m));
+  })();
+}
+
+/** Returns and deletes all saved undelivered messages, grouped by user in delivery order. */
+export function dbTakePendingMessages(): Map<string, Message[]> {
+  const rows = db.prepare("SELECT user_name, message FROM pending_messages ORDER BY seq").all() as {
+    user_name: string;
+    message: string;
+  }[];
+  db.prepare("DELETE FROM pending_messages").run();
+  const result = new Map<string, Message[]>();
+  for (const row of rows) {
+    const list = result.get(row.user_name) ?? [];
+    list.push(JSON.parse(row.message) as Message);
+    result.set(row.user_name, list);
+  }
+  return result;
 }

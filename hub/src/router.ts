@@ -13,6 +13,15 @@ export function ensureQueue(name: string): void {
   }
 }
 
+/** Snapshot of all non-empty queues, e.g. to save them before a restart. */
+export function getAllQueues(): Map<string, Message[]> {
+  return new Map([...messageQueues].filter(([, q]) => q.length > 0).map(([n, q]) => [n, [...q]]));
+}
+
+export function resetQueues(): void {
+  messageQueues.clear();
+}
+
 export function removeQueue(name: string): void {
   messageQueues.delete(name);
 }

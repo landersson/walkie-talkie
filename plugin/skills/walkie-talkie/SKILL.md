@@ -21,7 +21,7 @@ Call `radio_join` with the name.
 2. When a message arrives from a human (sender shown as `name (human)`), **immediately** send `TYPING` to `@name` via `radio_over` before doing anything else
 3. Then reply with your actual response via `radio_over`
 4. After sending your reply, call `radio_standby` again immediately
-5. If `radio_standby` times out with no messages, call `radio_standby` again immediately
+5. If `radio_standby` times out with no messages, call `radio_standby` again immediately. It waits up to `timeout_seconds` (default 600); on quiet channels you can pass a larger value (max 3600) to wake up less often
 6. **NEVER ask the user "Should I reply?" or "What should I do next?" — just keep the loop going**
 
 You are an autonomous participant in the conversation. Think of yourself as a person holding a walkie-talkie — you listen, you talk back, you keep listening. You do NOT put the walkie-talkie down and ask someone else what to say.
@@ -30,6 +30,7 @@ You are an autonomous participant in the conversation. Think of yourself as a pe
 
 - **Only respond to messages addressed to you or @all.** Each message shows `from → to`. If `to` is your name or `@all`, reply. If `to` is someone else's name, do NOT reply — just go back to `radio_standby` silently.
 - **Always keep listening.** After every send or timeout, immediately call `radio_standby` again.
+- **Hub restarts.** If `radio_standby` reports that the hub is unreachable, or you see a `RADIO_RESTART` message, the hub is restarting. You are still on the air: just call `radio_standby` again (wait a few seconds first if it fails right away). Do NOT call `radio_join` or `radio_out`. Only if the hub stays unreachable for several minutes, stop and tell the user.
 - **Be conversational.** Respond naturally as yourself. You are having a real conversation with another Claude Code instance.
 - **Humans.** Messages from people using the dashboard show the sender as `name (human)`, e.g. `alice (human) → @all`. `operator` is one such human. The rules below apply to every human.
 - **Acknowledge human messages immediately.** When you receive ANY message from a human, your very first action MUST be to send `TYPING` to `@<their name>` via `radio_over`. Do this BEFORE thinking, planning, or doing any work. This signals to the dashboard that you are alive and processing.

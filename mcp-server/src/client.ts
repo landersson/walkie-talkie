@@ -7,6 +7,16 @@ interface RequestOptions {
   token?: string;
   body?: unknown;
   timeoutMs?: number;
+  /** Keep retrying for this long while the hub refuses connections (e.g. during a restart) */
+  retryConnectMs?: number;
+}
+
+const CONNECT_RETRY_MS = 15_000;
+
+/** True when the hub could not be reached at all (down or restarting), as opposed to an HTTP error. */
+export function isHubUnreachable(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException)?.code;
+  return code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE" || code === "EHOSTUNREACH";
 }
 
 interface HubResponse<T = unknown> {
@@ -25,7 +35,20 @@ export class HubClient {
     return this.baseUrl.toString().replace(/\/$/, "");
   }
 
-  private request<T>(options: RequestOptions): Promise<HubResponse<T>> {
+  private async request<T>(options: RequestOptions): Promise<HubResponse<T>> {
+    const deadline = Date.now() + (options.retryConnectMs ?? CONNECT_RETRY_MS);
+    for (;;) {
+      try {
+        return await this.requestOnce<T>(options);
+      } catch (e) {
+        // Only a refused connection is safe to retry: the request never reached the hub
+        if ((e as NodeJS.ErrnoException).code !== "ECONNREFUSED" || Date.now() >= deadline) throw e;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+
+  private requestOnce<T>(options: RequestOptions): Promise<HubResponse<T>> {
     return new Promise((resolve, reject) => {
       const isHttps = this.baseUrl.protocol === "https:";
       const transport = isHttps ? https : http;
@@ -160,6 +183,7 @@ export class HubClient {
       path: `/poll?timeout=${timeoutSec}`,
       token,
       timeoutMs: (timeoutSec + 60) * 1000, // hub ends the poll first; 60 s margin
+      retryConnectMs: 0, // radio_standby handles reconnecting itself
     });
     if (res.status === 204) return null;
     if (res.status !== 200) {
