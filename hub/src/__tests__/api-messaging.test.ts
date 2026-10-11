@@ -136,3 +136,28 @@ describe("POST /send", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("GET /poll", () => {
+  it("should end with 204 after the requested timeout", async () => {
+    const token = await registerUser(ctx, "poll-timeout");
+    const started = Date.now();
+    const res = await fetch(`${ctx.baseUrl}/poll?timeout=1`, { headers: { Authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(204);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("should deliver a message that arrives before the timeout", async () => {
+    const token = await registerUser(ctx, "poll-wait");
+    const senderToken = await registerUser(ctx, "poll-sender");
+    const poll = fetch(`${ctx.baseUrl}/poll?timeout=10`, { headers: { Authorization: `Bearer ${token}` } });
+    await fetch(`${ctx.baseUrl}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${senderToken}` },
+      body: JSON.stringify({ to: "@poll-wait", content: "ping" }),
+    });
+    const res = await poll;
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { messages: { content: string }[] };
+    expect(body.messages.map((m) => m.content)).toContain("ping");
+  });
+});

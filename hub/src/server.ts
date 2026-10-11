@@ -220,7 +220,10 @@ const handleInbox: RouteHandler = async (_req, res, userName) => {
 
 const handlePoll: RouteHandler = async (req, res, userName) => {
   const wasOffline = !isOnline(userName!);
-  addPoll(userName!, req, res);
+  // Optional ?timeout=<seconds> to end the poll early with 204 (clamped to 1 s .. 1 h)
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const timeoutSec = parseInt(url.searchParams.get("timeout") ?? "", 10);
+  addPoll(userName!, req, res, timeoutSec > 0 ? timeoutSec * 1000 : undefined);
   if (wasOffline) {
     setOnline(userName!);
     broadcast({ type: "status", name: userName!, online: true, timestamp: Date.now() });

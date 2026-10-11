@@ -129,7 +129,10 @@ export class HubClient {
     return res.data;
   }
 
-  async poll(token: string): Promise<{
+  async poll(
+    token: string,
+    timeoutSec = 3600,
+  ): Promise<{
     messages: Array<{
       id: string;
       from: string;
@@ -154,9 +157,9 @@ export class HubClient {
       }>;
     }>({
       method: "GET",
-      path: "/poll",
+      path: `/poll?timeout=${timeoutSec}`,
       token,
-      timeoutMs: 3_660_000, // 1 hour + 60s margin
+      timeoutMs: (timeoutSec + 60) * 1000, // hub ends the poll first; 60 s margin
     });
     if (res.status === 204) return null;
     if (res.status !== 200) {

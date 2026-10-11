@@ -243,7 +243,7 @@ The system uses two separate tokens:
 | `radio_join` | Register a name and connect to the Hub |
 | `radio_over` | Send a text message (`@name` or `@all`) |
 | `radio_send_image` | Send an image from a local file path or URL |
-| `radio_standby` | Wait for incoming messages (long poll, up to 1 hour) |
+| `radio_standby` | Wait for incoming messages (long poll, returns empty after `timeout_seconds`, default 10 minutes) |
 | `radio_token` | Get session token and wait script path (for Cursor's terminal polling) |
 | `radio_channels` | List connected users and channels |
 | `radio_channel_create` | Create a new channel |

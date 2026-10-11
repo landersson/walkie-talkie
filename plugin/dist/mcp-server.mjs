@@ -30196,13 +30196,13 @@ var HubClient = class {
     }
     return res.data;
   }
-  async poll(token) {
+  async poll(token, timeoutSec = 3600) {
     const res = await this.request({
       method: "GET",
-      path: "/poll",
+      path: `/poll?timeout=${timeoutSec}`,
       token,
-      timeoutMs: 366e4
-      // 1 hour + 60s margin
+      timeoutMs: (timeoutSec + 60) * 1e3
+      // hub ends the poll first; 60 s margin
     });
     if (res.status === 204) return null;
     if (res.status !== 200) {
@@ -30328,6 +30328,14 @@ var client;
 var joinToken;
 var currentToken = null;
 var currentName = null;
+var stashedMessages = [];
+function takeStashed() {
+  const messages = stashedMessages;
+  stashedMessages = [];
+  return messages;
+}
+var STANDBY_DEFAULT_SECONDS = 600;
+var STANDBY_PROGRESS_INTERVAL_MS = 3e4;
 function createMcpServer(hubUrl2, joinTok) {
   client = new HubClient(hubUrl2);
   joinToken = joinTok;
@@ -30452,7 +30460,8 @@ function createMcpServer(hubUrl2, joinTok) {
         };
       }
       try {
-        const result = await client.inbox(currentToken);
+        const inbox = await client.inbox(currentToken);
+        const result = { messages: [...takeStashed(), ...inbox.messages] };
         if (result.messages.length === 0) {
           return {
             content: [{ type: "text", text: "No new messages." }]
@@ -30506,9 +30515,11 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
   );
   server2.tool(
     "radio_standby",
-    "Stand by for incoming messages using long polling. Blocks up to 30 seconds. Returns received messages or empty if timeout.",
-    {},
-    async () => {
+    `Stand by for incoming messages using long polling. Returns as soon as a message arrives, or with "No new messages" after timeout_seconds (default ${STANDBY_DEFAULT_SECONDS}). Sends progress notifications while waiting.`,
+    {
+      timeout_seconds: external_exports.number().int().min(1).max(3600).optional().describe(`Maximum seconds to wait for a message (default ${STANDBY_DEFAULT_SECONDS}, max 3600)`)
+    },
+    async ({ timeout_seconds }, extra) => {
       if (!currentToken) {
         return {
           content: [{ type: "text", text: "Not on the air. Use radio_join first." }],
@@ -30516,10 +30527,39 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
         };
       }
       try {
-        const result = await client.poll(currentToken);
+        let result;
+        const stashed = takeStashed();
+        if (stashed.length > 0) {
+          result = { messages: stashed };
+        } else {
+          const progressToken = extra._meta?.progressToken;
+          const started = Date.now();
+          const progressTimer = progressToken === void 0 ? void 0 : setInterval(() => {
+            extra.sendNotification({
+              method: "notifications/progress",
+              params: {
+                progressToken,
+                progress: Math.round((Date.now() - started) / 1e3),
+                message: "Waiting for messages"
+              }
+            }).catch(() => {
+            });
+          }, STANDBY_PROGRESS_INTERVAL_MS);
+          try {
+            result = await client.poll(currentToken, timeout_seconds ?? STANDBY_DEFAULT_SECONDS);
+          } finally {
+            clearInterval(progressTimer);
+          }
+          if (extra.signal.aborted && result && result.messages.length > 0) {
+            stashedMessages.push(...result.messages);
+            return { content: [{ type: "text", text: "Cancelled." }] };
+          }
+        }
         if (!result || result.messages.length === 0) {
           return {
-            content: [{ type: "text", text: "No new messages (poll timed out). Try again." }]
+            content: [
+              { type: "text", text: "No new messages (standby timed out). Call radio_standby again." }
+            ]
           };
         }
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));

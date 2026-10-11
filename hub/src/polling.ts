@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { drainQueue } from "./router.js";
 import type { PendingPoll } from "./types.js";
 
-const POLL_TIMEOUT_MS = 3_600_000; // 1 hour
+const POLL_TIMEOUT_MS = 3_600_000; // 1 hour (default and maximum)
 const pendingPolls = new Map<string, PendingPoll>();
 
 // Track users explicitly detected as offline (poll connection dropped).
@@ -27,17 +27,23 @@ export function setOffline(userName: string): void {
   offlineUsers.add(userName);
 }
 
-export function addPoll(userName: string, req: IncomingMessage, res: ServerResponse): void {
+export function addPoll(
+  userName: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  timeoutMs = POLL_TIMEOUT_MS,
+): void {
   removePoll(userName);
+  timeoutMs = Math.min(Math.max(timeoutMs, 1000), POLL_TIMEOUT_MS);
 
   console.log(`[poll-start] ${userName} waiting for messages...`);
 
   const timer = setTimeout(() => {
     pendingPolls.delete(userName);
-    console.log(`[poll-timeout] ${userName} (no messages after ${POLL_TIMEOUT_MS / 1000}s)`);
+    console.log(`[poll-timeout] ${userName} (no messages after ${timeoutMs / 1000}s)`);
     res.writeHead(204);
     res.end();
-  }, POLL_TIMEOUT_MS);
+  }, timeoutMs);
 
   pendingPolls.set(userName, { userName, res, timer });
 

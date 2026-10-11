@@ -52,6 +52,21 @@ let joinToken: string;
 let currentToken: string | null = null;
 let currentName: string | null = null;
 
+type PolledMessage = NonNullable<Awaited<ReturnType<HubClient["poll"]>>>["messages"][number];
+
+// Messages that arrived for a radio_standby call the client had already given up on
+// (interrupted or timed out). They are handed out by the next radio_standby/radio_check.
+let stashedMessages: PolledMessage[] = [];
+
+function takeStashed(): PolledMessage[] {
+  const messages = stashedMessages;
+  stashedMessages = [];
+  return messages;
+}
+
+const STANDBY_DEFAULT_SECONDS = 600;
+const STANDBY_PROGRESS_INTERVAL_MS = 30_000;
+
 export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   client = new HubClient(hubUrl);
   joinToken = joinTok;
@@ -190,7 +205,8 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         };
       }
       try {
-        const result = await client.inbox(currentToken);
+        const inbox = await client.inbox(currentToken);
+        const result = { messages: [...takeStashed(), ...inbox.messages] };
         if (result.messages.length === 0) {
           return {
             content: [{ type: "text" as const, text: "No new messages." }],
@@ -245,9 +261,17 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
 
   server.tool(
     "radio_standby",
-    "Stand by for incoming messages using long polling. Blocks up to 30 seconds. Returns received messages or empty if timeout.",
-    {},
-    async () => {
+    `Stand by for incoming messages using long polling. Returns as soon as a message arrives, or with "No new messages" after timeout_seconds (default ${STANDBY_DEFAULT_SECONDS}). Sends progress notifications while waiting.`,
+    {
+      timeout_seconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(3600)
+        .optional()
+        .describe(`Maximum seconds to wait for a message (default ${STANDBY_DEFAULT_SECONDS}, max 3600)`),
+    },
+    async ({ timeout_seconds }, extra) => {
       if (!currentToken) {
         return {
           content: [{ type: "text" as const, text: "Not on the air. Use radio_join first." }],
@@ -255,10 +279,45 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         };
       }
       try {
-        const result = await client.poll(currentToken);
+        let result: { messages: PolledMessage[] } | null;
+        const stashed = takeStashed();
+        if (stashed.length > 0) {
+          result = { messages: stashed };
+        } else {
+          // Progress notifications keep the client's idle timeout from aborting a long wait
+          const progressToken = extra._meta?.progressToken;
+          const started = Date.now();
+          const progressTimer =
+            progressToken === undefined
+              ? undefined
+              : setInterval(() => {
+                  extra
+                    .sendNotification({
+                      method: "notifications/progress",
+                      params: {
+                        progressToken,
+                        progress: Math.round((Date.now() - started) / 1000),
+                        message: "Waiting for messages",
+                      },
+                    })
+                    .catch(() => {});
+                }, STANDBY_PROGRESS_INTERVAL_MS);
+          try {
+            result = await client.poll(currentToken, timeout_seconds ?? STANDBY_DEFAULT_SECONDS);
+          } finally {
+            clearInterval(progressTimer);
+          }
+          // The client gave up on this call: keep the messages for the next call instead of losing them
+          if (extra.signal.aborted && result && result.messages.length > 0) {
+            stashedMessages.push(...result.messages);
+            return { content: [{ type: "text" as const, text: "Cancelled." }] };
+          }
+        }
         if (!result || result.messages.length === 0) {
           return {
-            content: [{ type: "text" as const, text: "No new messages (poll timed out). Try again." }],
+            content: [
+              { type: "text" as const, text: "No new messages (standby timed out). Call radio_standby again." },
+            ],
           };
         }
         // Check for kill signal from operator
