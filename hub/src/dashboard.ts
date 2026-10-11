@@ -1030,7 +1030,8 @@ export function getDashboardHTML(): string {
     <span class="whoami" id="whoami"></span>
     <button class="filter-btn" id="switch-user-btn">Switch user</button>
     <button class="filter-btn" id="filter-btn">My messages</button>
-    <button class="clear-btn" id="clear-btn">Clear</button>
+    <button class="filter-btn" id="goto-last-btn" title="Scroll to the newest message">Go to last</button>
+    <button class="clear-btn" id="clear-btn" title="Clear this channel's messages from this tab (nothing is deleted; reload to see them again)">Clear</button>
   </header>
   <div class="container">
     <div id="sidebar">
@@ -1381,20 +1382,13 @@ export function getDashboardHTML(): string {
     }
 
     function applyChannelFilter() {
-      const msgs = messagesEl.querySelectorAll(".msg");
-      for (const msg of msgs) {
-        if (!selectedChannel) {
-          msg.classList.remove("hidden-by-filter");
-        } else {
-          const ch = msg.dataset.channel;
-          if (!ch) {
-            msg.classList.remove("hidden-by-filter");
-          } else if (ch === selectedChannel) {
-            msg.classList.remove("hidden-by-filter");
-          } else {
-            msg.classList.add("hidden-by-filter");
-          }
-        }
+      const clearedTs = clearedAt[selectedChannel];
+      for (const msg of messagesEl.querySelectorAll(".msg")) {
+        const ch = msg.dataset.channel;
+        const inChannel = !selectedChannel || !ch || ch === selectedChannel;
+        // Hub-wide events (no channel) from before this channel was cleared stay hidden in it
+        const cleared = !ch && clearedTs && Number(msg.dataset.ts) <= clearedTs;
+        msg.classList.toggle("hidden-by-filter", !inChannel || !!cleared);
       }
     }
 
@@ -1462,14 +1456,17 @@ export function getDashboardHTML(): string {
     const HISTORY_PAGE = 200;
     const historyState = {}; // channel -> { oldest, oldestSeq, done, loading, loadedOnce }
     const firstLiveTs = {}; // channel -> first live message timestamp seen before its history loaded
-    let historyCleared = false;
+    const clearedAt = {}; // channel -> when its view was cleared in this tab (Clear button)
     const historyStatusEl = document.createElement("div");
     historyStatusEl.id = "history-status";
     messagesEl.prepend(historyStatusEl);
 
     function renderHistoryStatus() {
       const st = historyState[selectedChannel];
-      if (historyCleared || !st) historyStatusEl.textContent = "";
+      if (clearedAt[selectedChannel]) {
+        historyStatusEl.textContent = "Cleared in this tab. Reload the page to see " + selectedChannel + "'s history again.";
+      }
+      else if (!st) historyStatusEl.textContent = "";
       else if (st.loading) historyStatusEl.textContent = "Loading older messages...";
       else if (st.done) {
         // The very start of the channel: its description, if it has one
@@ -1502,7 +1499,7 @@ export function getDashboardHTML(): string {
     }
 
     function loadHistory(channel) {
-      if (historyCleared) return;
+      if (clearedAt[channel]) return;
       if (!historyState[channel]) {
         // History must stop where live messages for this channel began, to avoid duplicates
         historyState[channel] = { oldest: firstLiveTs[channel] || null, done: false, loading: false, loadedOnce: false };
@@ -1516,6 +1513,12 @@ export function getDashboardHTML(): string {
       fetch(url, { headers: adminHeaders })
         .then(r => r.json())
         .then(data => {
+          st.loading = false;
+          if (clearedAt[channel]) {
+            // Cleared while this page was loading
+            renderHistoryStatus();
+            return;
+          }
           const msgs = data.messages || [];
           const prevHeight = messagesEl.scrollHeight;
           const prevTop = messagesEl.scrollTop;
@@ -1525,7 +1528,6 @@ export function getDashboardHTML(): string {
             st.oldestSeq = msgs[0].seq;
           }
           if (msgs.length < HISTORY_PAGE) st.done = true;
-          st.loading = false;
           if (channel === selectedChannel) {
             // First page: show the newest messages. Older pages: keep the reader's place.
             if (!st.loadedOnce) scrollBottom();
@@ -1850,11 +1852,19 @@ export function getDashboardHTML(): string {
       filterBtn.classList.toggle("active");
     };
 
-    // Clear button
+    document.getElementById("goto-last-btn").onclick = () => {
+      scrollBottom();
+      clearUnseen();
+    };
+
+    // Clear button: empties the current channel's view in this tab only; nothing is deleted
     document.getElementById("clear-btn").onclick = () => {
-      messagesEl.innerHTML = '<div class="empty">Waiting for transmissions...</div>';
-      messagesEl.prepend(historyStatusEl);
-      historyCleared = true;
+      const channel = selectedChannel || "#all";
+      clearedAt[channel] = Date.now();
+      for (const msg of messagesEl.querySelectorAll(".msg")) {
+        if (msg.dataset.channel === channel) msg.remove();
+      }
+      applyChannelFilter();
       renderHistoryStatus();
       clearUnseen();
     };
