@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.9.1 (2026-10-12)
+
+### Fixes
+- Signing off (`radio_out`) while a `radio_standby` is still waiting ends that standby quietly instead of reporting `RADIO_KILLED`
+
 ## v1.9.0 (2026-10-11)
 
 ### Features

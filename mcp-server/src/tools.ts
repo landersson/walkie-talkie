@@ -97,6 +97,8 @@ function endSession(): void {
   }
   currentToken = null;
   currentName = null;
+  // Ends a radio_standby that's still waiting (it would otherwise read the sign-off as a kick)
+  standbyGeneration++;
 }
 
 type PolledMessage = NonNullable<Awaited<ReturnType<HubClient["poll"]>>>["messages"][number];
@@ -137,15 +139,20 @@ function isRestartNotice(m: { from: string; content: string }): boolean {
  * retries while the hub is unreachable, and re-registers under the same name if the hub
  * came back without our session.
  */
-async function waitForMessages(timeoutSec: number, signal: AbortSignal): Promise<PolledMessage[] | "unreachable"> {
+async function waitForMessages(
+  timeoutSec: number,
+  signal: AbortSignal,
+): Promise<PolledMessage[] | "unreachable" | "signed-off"> {
   const deadline = Date.now() + timeoutSec * 1000;
   const generation = ++standbyGeneration;
   let reconnecting = false;
   while (!signal.aborted && generation === standbyGeneration) {
     const remainingSec = Math.ceil((deadline - Date.now()) / 1000);
     if (remainingSec <= 0) break;
+    const token = currentToken;
+    if (!token) return "signed-off";
     try {
-      const result = await client.poll(currentToken!, remainingSec);
+      const result = await client.poll(token, remainingSec);
       if (reconnecting) console.error("[walkie-talkie] Reconnected to the hub");
       reconnecting = false;
       const messages = (result?.messages ?? []).filter((m) => !isRestartNotice(m));
@@ -159,6 +166,7 @@ async function waitForMessages(timeoutSec: number, signal: AbortSignal): Promise
       if (!result && Date.now() < deadline - 1000) continue;
       break;
     } catch (e) {
+      if (!currentToken) return "signed-off";
       if (isHubUnreachable(e)) {
         reconnecting = true;
       } else if ((e as Error).message === "Unauthorized" && reconnecting && currentName) {
@@ -173,6 +181,7 @@ async function waitForMessages(timeoutSec: number, signal: AbortSignal): Promise
       await new Promise((resolve) => setTimeout(resolve, Math.min(RECONNECT_DELAY_MS, deadline - Date.now())));
     }
   }
+  if (!currentToken) return "signed-off";
   return reconnecting ? "unreachable" : [];
 }
 
@@ -421,11 +430,14 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
                     })
                     .catch(() => {});
                 }, STANDBY_PROGRESS_INTERVAL_MS);
-          let waited: PolledMessage[] | "unreachable";
+          let waited: PolledMessage[] | "unreachable" | "signed-off";
           try {
             waited = await waitForMessages(timeout_seconds ?? STANDBY_DEFAULT_SECONDS, extra.signal);
           } finally {
             clearInterval(progressTimer);
+          }
+          if (waited === "signed-off") {
+            return { content: [{ type: "text" as const, text: "Standby ended: you signed off with radio_out." }] };
           }
           if (waited === "unreachable") {
             return {

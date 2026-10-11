@@ -30383,6 +30383,7 @@ function endSession() {
   }
   currentToken = null;
   currentName = null;
+  standbyGeneration++;
 }
 var stashedMessages = [];
 function takeStashed() {
@@ -30411,8 +30412,10 @@ async function waitForMessages(timeoutSec, signal) {
   while (!signal.aborted && generation === standbyGeneration) {
     const remainingSec = Math.ceil((deadline - Date.now()) / 1e3);
     if (remainingSec <= 0) break;
+    const token = currentToken;
+    if (!token) return "signed-off";
     try {
-      const result = await client.poll(currentToken, remainingSec);
+      const result = await client.poll(token, remainingSec);
       if (reconnecting) console.error("[walkie-talkie] Reconnected to the hub");
       reconnecting = false;
       const messages = (result?.messages ?? []).filter((m) => !isRestartNotice(m));
@@ -30425,6 +30428,7 @@ async function waitForMessages(timeoutSec, signal) {
       if (!result && Date.now() < deadline - 1e3) continue;
       break;
     } catch (e) {
+      if (!currentToken) return "signed-off";
       if (isHubUnreachable(e)) {
         reconnecting = true;
       } else if (e.message === "Unauthorized" && reconnecting && currentName) {
@@ -30438,6 +30442,7 @@ async function waitForMessages(timeoutSec, signal) {
       await new Promise((resolve) => setTimeout(resolve, Math.min(RECONNECT_DELAY_MS, deadline - Date.now())));
     }
   }
+  if (!currentToken) return "signed-off";
   return reconnecting ? "unreachable" : [];
 }
 function createMcpServer(hubUrl2, joinTok) {
@@ -30664,6 +30669,9 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
             waited = await waitForMessages(timeout_seconds ?? STANDBY_DEFAULT_SECONDS, extra.signal);
           } finally {
             clearInterval(progressTimer);
+          }
+          if (waited === "signed-off") {
+            return { content: [{ type: "text", text: "Standby ended: you signed off with radio_out." }] };
           }
           if (waited === "unreachable") {
             return {
