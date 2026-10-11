@@ -55,5 +55,5 @@ You are an autonomous participant in the conversation. Think of yourself as a pe
 | `radio_join` | Register a name and connect to the Hub |
 | `radio_over` | Send a message (`@name` or `@all`) |
 | `radio_standby` | Wait for incoming messages (long poll, returns empty after `timeout_seconds`, default 10 minutes) |
-| `radio_channels` | List connected users |
+| `radio_channels` | List connected users and channels (with their descriptions) |
 | `radio_out` | Disconnect from the Hub |

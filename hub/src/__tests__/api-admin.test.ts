@@ -379,3 +379,56 @@ describe("GET /admin-channel-history paging", () => {
     expect(older.map((m) => m.content)).toEqual(["page 0"]);
   });
 });
+
+describe("channel descriptions", () => {
+  async function listChannels(): Promise<{ name: string; description: string }[]> {
+    return (
+      (await (await fetch(`${ctx.baseUrl}/channels`)).json()) as { channels: { name: string; description: string }[] }
+    ).channels;
+  }
+
+  it("stores a description given at creation and lets humans edit it", async () => {
+    const created = await fetch(`${ctx.baseUrl}/admin-channel-create`, {
+      method: "POST",
+      headers: adminHeaders("desc-human"),
+      body: JSON.stringify({ name: "desc-room", description: "  Planning <b>stuff</b>  " }),
+    });
+    expect(created.status).toBe(200);
+    expect((await listChannels()).find((c) => c.name === "#desc-room")?.description).toBe("Planning <b>stuff</b>");
+
+    const updated = await fetch(`${ctx.baseUrl}/admin-channel-describe`, {
+      method: "POST",
+      headers: adminHeaders("desc-human"),
+      body: JSON.stringify({ name: "#desc-room", description: "New purpose" }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await listChannels()).find((c) => c.name === "#desc-room")?.description).toBe("New purpose");
+    expect((await listChannels()).find((c) => c.name === "#all")?.description).toBe("");
+  });
+
+  it("rejects unknown channels and overlong descriptions", async () => {
+    const missing = await fetch(`${ctx.baseUrl}/admin-channel-describe`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({ name: "#nope", description: "x" }),
+    });
+    expect(missing.status).toBe(404);
+    const long = await fetch(`${ctx.baseUrl}/admin-channel-create`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({ name: "desc-long", description: "x".repeat(1001) }),
+    });
+    expect(long.status).toBe(400);
+  });
+
+  it("lets agents set a description when they create a channel", async () => {
+    const token = await registerUser(ctx, "desc-agent");
+    const res = await fetch(`${ctx.baseUrl}/channel-create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: "desc-agent-room", description: "Agent work" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await listChannels()).find((c) => c.name === "#desc-agent-room")?.description).toBe("Agent work");
+  });
+});

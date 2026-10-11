@@ -284,7 +284,7 @@ export function getDashboardHTML(): string {
   #channel-list li.active .channel-unread {
     display: none;
   }
-  .channel-del {
+  .channel-del, .channel-info {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text-tertiary);
@@ -298,8 +298,12 @@ export function getDashboardHTML(): string {
     flex-shrink: 0;
     margin-left: 4px;
   }
-  #channel-list li:hover .channel-del {
+  #channel-list li:hover .channel-del, #channel-list li:hover .channel-info {
     opacity: 1;
+  }
+  .channel-info:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .channel-del:hover {
     border-color: var(--red-border);
@@ -874,6 +878,20 @@ export function getDashboardHTML(): string {
   #history-status:empty {
     display: none;
   }
+  .channel-intro {
+    text-align: left;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 0 0 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .channel-intro strong {
+    display: block;
+    margin-bottom: 4px;
+  }
 
   #new-msg-btn {
     display: none;
@@ -1065,6 +1083,22 @@ export function getDashboardHTML(): string {
       </div>
     </div>
   </div>
+  <div class="dialog-overlay" id="channel-dialog" style="display:none">
+    <div class="dialog">
+      <h2 id="channel-dialog-title">New Channel</h2>
+      <label id="channel-dialog-name-row">Name <span style="font-weight:400;color:var(--text-tertiary)">(without #)</span>
+        <input type="text" id="channel-dialog-name" placeholder="my-channel">
+      </label>
+      <label>Description <span style="font-weight:400;color:var(--text-tertiary)">(optional; shown when hovering over the channel and at the start of its history)</span>
+        <textarea id="channel-dialog-description" rows="5" maxlength="1000" placeholder="What is this channel for?"></textarea>
+      </label>
+      <span id="channel-dialog-error" style="color:var(--red);font-size:11px;display:none"></span>
+      <div class="dialog-buttons">
+        <button class="btn-cancel" id="channel-dialog-cancel">Cancel</button>
+        <button class="btn-save" id="channel-dialog-save">Save</button>
+      </div>
+    </div>
+  </div>
   <div class="dialog-overlay" id="agent-dialog" style="display:none">
     <div class="dialog">
       <h2 id="agent-dialog-title">New Agent</h2>
@@ -1249,10 +1283,16 @@ export function getDashboardHTML(): string {
       fetch("/channels").then(r => r.json()).then(data => {
         channels.clear();
         for (const ch of data.channels) {
-          channels.set(ch.name, { memberCount: ch.memberCount, createdBy: ch.createdBy, members: ch.members || [] });
+          channels.set(ch.name, {
+            memberCount: ch.memberCount,
+            createdBy: ch.createdBy,
+            members: ch.members || [],
+            description: ch.description || "",
+          });
         }
         renderChannels();
         updateChannelHeader();
+        renderHistoryStatus();
       }).catch(() => {});
     }
 
@@ -1262,15 +1302,21 @@ export function getDashboardHTML(): string {
         const li = document.createElement("li");
         const unread = unreadCounts[name] || 0;
         const unreadBadge = unread > 0 ? '<span class="channel-unread">' + unread + '</span>' : '';
+        const infoBtn = '<button class="channel-info" title="View or edit the channel description">?</button>';
         if (name === "#all") {
-          li.innerHTML = '<span class="channel-name">' + name + '</span>' + unreadBadge;
+          li.innerHTML = '<span class="channel-name">' + escapeHtml(name) + '</span>' + unreadBadge + infoBtn;
         } else {
-          li.innerHTML = '<span class="channel-name">' + name + '</span>' + unreadBadge + '<button class="channel-del">x</button>';
+          li.innerHTML = '<span class="channel-name">' + escapeHtml(name) + '</span>' + unreadBadge + infoBtn + '<button class="channel-del">x</button>';
           li.querySelector(".channel-del").onclick = (e) => {
             e.stopPropagation();
             if (confirm("Delete " + name + "?")) deleteChannel(name);
           };
         }
+        li.querySelector(".channel-info").onclick = (e) => {
+          e.stopPropagation();
+          openChannelDialog(name);
+        };
+        if (info.description) li.title = info.description;
         if (selectedChannel === name) li.className = "active";
         li.onclick = () => selectChannel(name);
         channelListEl.appendChild(li);
@@ -1368,6 +1414,10 @@ export function getDashboardHTML(): string {
       return div;
     }
 
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    }
+
     function messageHtml(m) {
       return '<span class="time">' + formatTime(m.timestamp) + '</span>' +
         '<span class="channel-tag">' + (m.channel || "#all") + '</span>' +
@@ -1421,7 +1471,14 @@ export function getDashboardHTML(): string {
       const st = historyState[selectedChannel];
       if (historyCleared || !st) historyStatusEl.textContent = "";
       else if (st.loading) historyStatusEl.textContent = "Loading older messages...";
-      else if (st.done) historyStatusEl.textContent = "Start of " + selectedChannel + " history";
+      else if (st.done) {
+        // The very start of the channel: its description, if it has one
+        const info = channels.get(selectedChannel);
+        const intro = info && info.description
+          ? '<div class="channel-intro"><strong>' + escapeHtml(selectedChannel) + '</strong>' + escapeHtml(info.description) + '</div>'
+          : "";
+        historyStatusEl.innerHTML = intro + "Start of " + escapeHtml(selectedChannel) + " history";
+      }
       else historyStatusEl.textContent = "";
     }
 
@@ -1916,16 +1973,66 @@ export function getDashboardHTML(): string {
 
     document.getElementById("add-agent-btn").onclick = () => openAgentDialog(null, null);
 
-    document.getElementById("add-channel-btn").onclick = () => {
-      const name = prompt("Channel name (without #):");
-      if (!name || !name.trim()) return;
-      fetch("/admin-channel-create", {
-        method: "POST",
-        headers: adminHeaders,
-        body: JSON.stringify({ name: name.trim() }),
-      }).then(r => r.json()).then(data => {
-        if (data.error) alert(data.error);
-      }).catch(() => {});
+    // Channel dialog: create a channel (name + description), or view/edit a channel's description
+    const channelDialogEl = document.getElementById("channel-dialog");
+    const channelDialogTitle = document.getElementById("channel-dialog-title");
+    const channelDialogNameRow = document.getElementById("channel-dialog-name-row");
+    const channelDialogName = document.getElementById("channel-dialog-name");
+    const channelDialogDescription = document.getElementById("channel-dialog-description");
+    const channelDialogError = document.getElementById("channel-dialog-error");
+    let channelDialogEditing = null; // channel name when editing, null when creating
+
+    function openChannelDialog(name) {
+      channelDialogEditing = name;
+      const info = name ? channels.get(name) : null;
+      channelDialogTitle.textContent = name ? name : "New Channel";
+      channelDialogNameRow.style.display = name ? "none" : "";
+      channelDialogName.value = "";
+      channelDialogDescription.value = info ? info.description || "" : "";
+      channelDialogError.style.display = "none";
+      channelDialogEl.style.display = "flex";
+      (name ? channelDialogDescription : channelDialogName).focus();
+    }
+
+    function closeChannelDialog() {
+      channelDialogEl.style.display = "none";
+    }
+
+    function saveChannelDialog() {
+      const description = channelDialogDescription.value.trim();
+      let url, body;
+      if (channelDialogEditing) {
+        url = "/admin-channel-describe";
+        body = { name: channelDialogEditing, description };
+      } else {
+        const name = channelDialogName.value.trim();
+        if (!name) { channelDialogName.focus(); return; }
+        url = "/admin-channel-create";
+        body = { name, description };
+      }
+      fetch(url, { method: "POST", headers: adminHeaders, body: JSON.stringify(body) })
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) {
+            channelDialogError.textContent = data.error;
+            channelDialogError.style.display = "";
+          } else {
+            closeChannelDialog();
+          }
+        })
+        .catch(() => {});
+    }
+
+    document.getElementById("add-channel-btn").onclick = () => openChannelDialog(null);
+    document.getElementById("channel-dialog-cancel").onclick = closeChannelDialog;
+    document.getElementById("channel-dialog-save").onclick = saveChannelDialog;
+    channelDialogEl.onclick = (e) => { if (e.target === channelDialogEl) closeChannelDialog(); };
+    channelDialogEl.onkeydown = (e) => {
+      if (e.key === "Escape") closeChannelDialog();
+      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey || e.target === channelDialogName)) {
+        e.preventDefault();
+        saveChannelDialog();
+      }
     };
 
     function deleteChannel(name) {
@@ -1950,10 +2057,16 @@ export function getDashboardHTML(): string {
 
       fetch("/channels").then(r => r.json()).then(data => {
         for (const ch of data.channels) {
-          channels.set(ch.name, { memberCount: ch.memberCount, createdBy: ch.createdBy, members: ch.members || [] });
+          channels.set(ch.name, {
+            memberCount: ch.memberCount,
+            createdBy: ch.createdBy,
+            members: ch.members || [],
+            description: ch.description || "",
+          });
         }
         renderChannels();
         updateChannelHeader();
+        renderHistoryStatus();
       }).catch(() => {});
 
       // Load agent configs
@@ -2068,6 +2181,18 @@ export function getDashboardHTML(): string {
             'Channel <strong>' + ev.name + '</strong> deleted',
             "system channel-event leave",
             null
+          );
+        } else if (ev.type === "channel_update") {
+          const info = channels.get(ev.name);
+          if (info) info.description = ev.description;
+          renderChannels();
+          if (selectedChannel === ev.name) renderHistoryStatus();
+          addMessage(
+            '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+            '<strong>' + escapeHtml(ev.by) + '</strong> ' + (ev.description ? 'updated' : 'removed') +
+            ' the description of <strong>' + escapeHtml(ev.name) + '</strong>',
+            "system channel-event",
+            ev.name
           );
         } else if (ev.type === "agent_config_create" || ev.type === "agent_config_update") {
           refreshAgentConfigs();

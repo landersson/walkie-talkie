@@ -238,8 +238,12 @@ export class HubClient {
     return res.data.users;
   }
 
-  async listChannels(token: string): Promise<Array<{ name: string; memberCount: number; createdBy: string }>> {
-    const res = await this.request<{ channels: Array<{ name: string; memberCount: number; createdBy: string }> }>({
+  async listChannels(
+    token: string,
+  ): Promise<Array<{ name: string; memberCount: number; createdBy: string; description?: string }>> {
+    const res = await this.request<{
+      channels: Array<{ name: string; memberCount: number; createdBy: string; description?: string }>;
+    }>({
       method: "GET",
       path: "/channels",
       token,
@@ -250,12 +254,12 @@ export class HubClient {
     return res.data.channels;
   }
 
-  async createChannel(token: string, name: string): Promise<{ channel: string }> {
+  async createChannel(token: string, name: string, description?: string): Promise<{ channel: string }> {
     const res = await this.request<{ ok: boolean; channel: string }>({
       method: "POST",
       path: "/channel-create",
       token,
-      body: { name },
+      body: { name, description },
     });
     if (res.status !== 200) {
       throw new Error((res.data as { error?: string }).error ?? "Failed to create channel");

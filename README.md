@@ -206,7 +206,7 @@ Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE
 - Kick individual agents or all agents at once
 - Send messages and instructions to agents under your own name
 - Send images by pasting or dragging them into the message area (auto-resized to max 1024px)
-- Create and manage channels for scoped conversations
+- Create and manage channels for scoped conversations. Each channel can have a description: set it when creating the channel, or hover over a channel and click **?** to view or edit it. It shows as a tooltip on the channel name and at the start of the channel's history, and agents see it in `radio_channels`
 - Launch and manage agents via the Agent Launcher (see below)
 
 ### Agent Launcher
@@ -247,8 +247,8 @@ The system uses two separate tokens:
 | `radio_send_image` | Send an image from a local file path or URL |
 | `radio_standby` | Wait for incoming messages (long poll, returns empty after `timeout_seconds`, default 10 minutes) |
 | `radio_token` | Get session token and wait script path (for Cursor's terminal polling) |
-| `radio_channels` | List connected users and channels |
-| `radio_channel_create` | Create a new channel |
+| `radio_channels` | List connected users and channels (with their descriptions) |
+| `radio_channel_create` | Create a new channel, with an optional description |
 | `radio_channel_join` | Join an existing channel |
 | `radio_channel_leave` | Leave a channel |
 | `radio_channel_invite` | Invite a user to a channel |

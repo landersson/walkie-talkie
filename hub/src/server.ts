@@ -38,6 +38,7 @@ import {
   dbListChannels,
   dbListSessions,
   dbSavePendingMessages,
+  dbSetChannelDescription,
   dbTakePendingMessages,
   dbUpdateAgentConfig,
   dbUpdateReadCursor,
@@ -361,17 +362,32 @@ const handleAdminSend: RouteHandler = async (req, res, userName) => {
 };
 
 // Channel endpoints
+const CHANNEL_DESCRIPTION_MAX = 1000;
+
+/** Validates an optional channel description; returns it trimmed, or an error message. */
+function parseDescription(value: unknown): { description: string } | { error: string } {
+  if (value === undefined || value === null) return { description: "" };
+  if (typeof value !== "string") return { error: "Invalid 'description' field" };
+  const description = value.trim();
+  if (description.length > CHANNEL_DESCRIPTION_MAX) {
+    return { error: `Description too long (max ${CHANNEL_DESCRIPTION_MAX} characters)` };
+  }
+  return { description };
+}
+
 const handleChannelCreate: RouteHandler = async (req, res, userName) => {
-  const body = JSON.parse(await readBody(req)) as { name?: string };
+  const body = JSON.parse(await readBody(req)) as { name?: string; description?: unknown };
   if (!body.name || typeof body.name !== "string") {
     return sendError(res, 400, "Missing or invalid 'name' field");
   }
+  const parsed = parseDescription(body.description);
+  if ("error" in parsed) return sendError(res, 400, parsed.error);
   const channelName = body.name.startsWith("#") ? body.name : `#${body.name}`;
   if (dbGetChannel(channelName)) {
     return sendError(res, 409, `Channel "${channelName}" already exists`);
   }
   try {
-    dbCreateChannel(channelName, userName!);
+    dbCreateChannel(channelName, userName!, parsed.description);
     ensureChannelMembership(channelName);
     // Auto-join the creator
     joinChannel(channelName, userName!);
@@ -444,6 +460,7 @@ const handleListChannels: RouteHandler = async (_req, res) => {
     name: ch.name,
     createdBy: ch.created_by,
     createdAt: ch.created_at,
+    description: ch.description ?? "",
     memberCount: memberCounts.get(ch.name) ?? 0,
     members: getChannelMembers(ch.name),
   }));
@@ -465,16 +482,18 @@ const handleChannelHistory: RouteHandler = async (req, res, userName) => {
 };
 
 const handleAdminChannelCreate: RouteHandler = async (req, res, userName) => {
-  const body = JSON.parse(await readBody(req)) as { name?: string };
+  const body = JSON.parse(await readBody(req)) as { name?: string; description?: unknown };
   if (!body.name || typeof body.name !== "string") {
     return sendError(res, 400, "Missing or invalid 'name' field");
   }
+  const parsed = parseDescription(body.description);
+  if ("error" in parsed) return sendError(res, 400, parsed.error);
   const channelName = body.name.startsWith("#") ? body.name : `#${body.name}`;
   if (dbGetChannel(channelName)) {
     return sendError(res, 409, `Channel "${channelName}" already exists`);
   }
   try {
-    dbCreateChannel(channelName, userName!);
+    dbCreateChannel(channelName, userName!, parsed.description);
     ensureChannelMembership(channelName);
     broadcast({ type: "channel_create", name: channelName, timestamp: Date.now() });
     console.log(`[admin-channel-create] ${channelName}`);
@@ -482,6 +501,27 @@ const handleAdminChannelCreate: RouteHandler = async (req, res, userName) => {
   } catch (e) {
     sendError(res, 500, (e as Error).message);
   }
+};
+
+const handleAdminChannelDescribe: RouteHandler = async (req, res, userName) => {
+  const body = JSON.parse(await readBody(req)) as { name?: string; description?: unknown };
+  if (!body.name || typeof body.name !== "string") {
+    return sendError(res, 400, "Missing or invalid 'name' field");
+  }
+  const parsed = parseDescription(body.description);
+  if ("error" in parsed) return sendError(res, 400, parsed.error);
+  if (!dbSetChannelDescription(body.name, parsed.description)) {
+    return sendError(res, 404, `Channel "${body.name}" not found`);
+  }
+  broadcast({
+    type: "channel_update",
+    name: body.name,
+    description: parsed.description,
+    by: userName!,
+    timestamp: Date.now(),
+  });
+  console.log(`[admin-channel-describe] ${body.name} by ${userName}`);
+  sendJson(res, 200, { ok: true, channel: body.name, description: parsed.description });
 };
 
 const handleAdminChannelHistory: RouteHandler = async (req, res) => {
@@ -673,6 +713,7 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/admin-send": { method: "POST", handler: handleAdminSend },
   "/admin-channel-create": { method: "POST", handler: handleAdminChannelCreate },
   "/admin-channel-delete": { method: "POST", handler: handleAdminChannelDelete },
+  "/admin-channel-describe": { method: "POST", handler: handleAdminChannelDescribe },
   "/admin-channel-history": { method: "GET", handler: handleAdminChannelHistory },
   "/admin-mark-read": { method: "POST", handler: handleAdminMarkRead },
   "/admin-unread-counts": { method: "GET", handler: handleAdminUnreadCounts },

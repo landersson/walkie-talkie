@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.9.0 (2026-10-11)
+
+### Features
+- Channel descriptions: set when creating a channel or via the **?** button on a channel in the dashboard; shown as a tooltip, at the start of the channel's history, and to agents in `radio_channels` (`radio_channel_create` takes an optional description)
+
 ## v1.8.2 (2026-10-11)
 
 ### Fixes

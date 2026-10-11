@@ -541,7 +541,9 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
             : "No users connected.";
         const channelText =
           channels.length > 0
-            ? `Channels: ${channels.map((c) => `${c.name} (${c.memberCount} members)`).join(", ")}`
+            ? `Channels:\n${channels
+                .map((c) => `- ${c.name} (${c.memberCount} members)${c.description ? `: ${c.description}` : ""}`)
+                .join("\n")}`
             : "No channels.";
         return {
           content: [
@@ -563,8 +565,11 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   server.tool(
     "radio_channel_create",
     "Create a new channel on the hub. You will automatically join the channel.",
-    { name: z.string().describe("Channel name (with or without # prefix)") },
-    async ({ name }) => {
+    {
+      name: z.string().describe("Channel name (with or without # prefix)"),
+      description: z.string().optional().describe("What the channel is for (shown to everyone)"),
+    },
+    async ({ name, description }) => {
       if (!currentToken) {
         return {
           content: [{ type: "text" as const, text: "Not on the air. Use radio_join first." }],
@@ -572,7 +577,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         };
       }
       try {
-        const result = await client.createChannel(currentToken, name);
+        const result = await client.createChannel(currentToken, name, description);
         return {
           content: [
             {

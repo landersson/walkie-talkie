@@ -17,6 +17,7 @@ export interface ChannelRow {
   name: string;
   created_by: string;
   created_at: number;
+  description: string;
 }
 
 let db: Database.Database;
@@ -104,6 +105,12 @@ export function initDB(): void {
   }
 
   try {
+    db.exec("ALTER TABLE channels ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  } catch {
+    /* column already exists */
+  }
+
+  try {
     db.exec("ALTER TABLE messages ADD COLUMN image TEXT");
   } catch {
     /* column already exists */
@@ -120,10 +127,19 @@ export function initDB(): void {
   }
 }
 
-export function dbCreateChannel(name: string, createdBy: string): ChannelRow {
+export function dbCreateChannel(name: string, createdBy: string, description = ""): ChannelRow {
   const now = Date.now();
-  db.prepare("INSERT INTO channels (name, created_by, created_at) VALUES (?, ?, ?)").run(name, createdBy, now);
-  return { name, created_by: createdBy, created_at: now };
+  db.prepare("INSERT INTO channels (name, created_by, created_at, description) VALUES (?, ?, ?, ?)").run(
+    name,
+    createdBy,
+    now,
+    description,
+  );
+  return { name, created_by: createdBy, created_at: now, description };
+}
+
+export function dbSetChannelDescription(name: string, description: string): boolean {
+  return db.prepare("UPDATE channels SET description = ? WHERE name = ?").run(description, name).changes > 0;
 }
 
 export function dbDeleteChannel(name: string): boolean {
@@ -132,11 +148,13 @@ export function dbDeleteChannel(name: string): boolean {
 }
 
 export function dbListChannels(): ChannelRow[] {
-  return db.prepare("SELECT name, created_by, created_at FROM channels ORDER BY created_at").all() as ChannelRow[];
+  return db
+    .prepare("SELECT name, created_by, created_at, description FROM channels ORDER BY created_at")
+    .all() as ChannelRow[];
 }
 
 export function dbGetChannel(name: string): ChannelRow | undefined {
-  return db.prepare("SELECT name, created_by, created_at FROM channels WHERE name = ?").get(name) as
+  return db.prepare("SELECT name, created_by, created_at, description FROM channels WHERE name = ?").get(name) as
     | ChannelRow
     | undefined;
 }

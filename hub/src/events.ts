@@ -17,6 +17,7 @@ export type HubEvent =
   | { type: "channel_join"; channel: string; userName: string; timestamp: number }
   | { type: "channel_leave"; channel: string; userName: string; timestamp: number }
   | { type: "channel_delete"; name: string; timestamp: number }
+  | { type: "channel_update"; name: string; description: string; by: string; timestamp: number }
   | { type: "status"; name: string; online: boolean; timestamp: number }
   | { type: "typing"; name: string; channel: string; timestamp: number }
   | { type: "read_update"; userName: string; channel: string; timestamp: number }

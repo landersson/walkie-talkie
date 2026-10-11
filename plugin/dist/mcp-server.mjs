@@ -30262,12 +30262,12 @@ var HubClient = class {
     }
     return res.data.channels;
   }
-  async createChannel(token, name) {
+  async createChannel(token, name, description) {
     const res = await this.request({
       method: "POST",
       path: "/channel-create",
       token,
-      body: { name }
+      body: { name, description }
     });
     if (res.status !== 200) {
       throw new Error(res.data.error ?? "Failed to create channel");
@@ -30764,7 +30764,8 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
           const tags = [u.role === "human" ? "human" : "", u.online ? "" : "offline"].filter(Boolean);
           return tags.length > 0 ? `${u.name} (${tags.join(", ")})` : u.name;
         }).join(", ")}` : "No users connected.";
-        const channelText = channels.length > 0 ? `Channels: ${channels.map((c) => `${c.name} (${c.memberCount} members)`).join(", ")}` : "No channels.";
+        const channelText = channels.length > 0 ? `Channels:
+${channels.map((c) => `- ${c.name} (${c.memberCount} members)${c.description ? `: ${c.description}` : ""}`).join("\n")}` : "No channels.";
         return {
           content: [
             {
@@ -30785,8 +30786,11 @@ ${channelText}`
   server2.tool(
     "radio_channel_create",
     "Create a new channel on the hub. You will automatically join the channel.",
-    { name: external_exports.string().describe("Channel name (with or without # prefix)") },
-    async ({ name }) => {
+    {
+      name: external_exports.string().describe("Channel name (with or without # prefix)"),
+      description: external_exports.string().optional().describe("What the channel is for (shown to everyone)")
+    },
+    async ({ name, description }) => {
       if (!currentToken) {
         return {
           content: [{ type: "text", text: "Not on the air. Use radio_join first." }],
@@ -30794,7 +30798,7 @@ ${channelText}`
         };
       }
       try {
-        const result = await client.createChannel(currentToken, name);
+        const result = await client.createChannel(currentToken, name, description);
         return {
           content: [
             {
