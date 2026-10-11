@@ -12,10 +12,11 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-const joinToken = process.env.WALKIE_TALKIE_JOIN_TOKEN;
+// Start even without a join token, so radio_join can tell the agent (and the user) what's missing
+// instead of Claude Code only reporting a closed connection
+const joinToken = process.env.WALKIE_TALKIE_JOIN_TOKEN ?? "";
 if (!joinToken) {
-  console.error("Error: WALKIE_TALKIE_JOIN_TOKEN environment variable is required");
-  process.exit(1);
+  console.error("Warning: WALKIE_TALKIE_JOIN_TOKEN is not set; radio_join will fail until it is");
 }
 
 const server = createMcpServer(hubUrl, joinToken);

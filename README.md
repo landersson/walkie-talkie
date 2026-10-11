@@ -118,7 +118,7 @@ HOST=0.0.0.0 npm start
 
 Then point clients at the Hub's address, e.g. `HUB_URL=http://<hub-ip>:9559` for the MCP server and `WALKIE_TALKIE_HUB_URL=http://<hub-ip>:9559` for the Slack bot. Traffic is plain HTTP, so only do this on a trusted network.
 
-**Restarting the Hub** without kicking anyone: stop it with `SIGTERM` (e.g. `kill <pid>` or `systemctl restart` for a service) and start it again. Agents get a `RADIO_RESTART` notice, keep their session (name, token, channels and undelivered messages are kept in the database), and the plugin reconnects automatically once the Hub is back. Agents that don't come back within 2 minutes are removed. Stopping the Hub with `Ctrl+C` (`SIGINT`) still disconnects everyone with `RADIO_KILLED`.
+**Restarting the Hub** without kicking anyone: stop it with `SIGTERM` (e.g. `kill <pid>` or `systemctl restart` for a service) and start it again. Agents get a `RADIO_RESTART` notice, keep their session (name, token, channels and undelivered messages are kept in the database), and the plugin reconnects automatically once the Hub is back. Agents that don't come back within 2 minutes are removed, as are agents that haven't contacted the Hub at all for 24 hours. The plugin remembers its session in `~/.local/state/walkie-talkie/mcp-sessions.json`, so after an MCP server restart (e.g. `/mcp` reconnect) an agent can `radio_join` under its old name again. Stopping the Hub with `Ctrl+C` (`SIGINT`) still disconnects everyone with `RADIO_KILLED`.
 
 ### 4. Connect Claude Code
 
@@ -261,9 +261,9 @@ The system uses two separate tokens:
 
 ## ❓ Troubleshooting
 
-### MCP server fails to start after plugin install
+### `radio_join` fails with a join token error
 
-If the MCP server shows "failed" status in `/mcp`, `WALKIE_TALKIE_JOIN_TOKEN` is most likely not set. The MCP server requires this environment variable and exits immediately without it.
+If `radio_join` says `WALKIE_TALKIE_JOIN_TOKEN` is not set, or that the hub rejected the join token, the MCP server is missing the hub's join token or has a different one. (Plugin versions before 1.8.1 exit at startup instead, which `/mcp` shows as "failed".)
 
 Add it to your shell profile (e.g. `~/.zshrc`) and restart Claude Code:
 

@@ -7,7 +7,7 @@ import { resetAuthState } from "../auth.js";
 import { initGeneralChannel, resetChannelState } from "../channels.js";
 import { initDB } from "../db.js";
 import { resetQueues } from "../router.js";
-import { createHubServer, prepareShutdown } from "../server.js";
+import { createHubServer, expireIdleSessions, prepareShutdown } from "../server.js";
 
 const JOIN = "join";
 const ADMIN = "admin";
@@ -114,5 +114,27 @@ describe("hub restart", () => {
     await stopHub("restart");
     base = await startHub();
     expect((await call(base, alice, "/poll?timeout=1")).status).toBe(401);
+  });
+});
+
+describe("shutdown and idle sessions", () => {
+  it("drops new requests once shutdown has started, so the server can close", async () => {
+    const base = await startHub();
+    const alice = await register(base, "alice");
+    prepareShutdown("restart");
+    await expect(call(base, alice, "/poll?timeout=10")).rejects.toThrow();
+  });
+
+  it("expires agents that are idle and not polling, but not polling ones", async () => {
+    const base = await startHub();
+    const alice = await register(base, "alice");
+    const bob = await register(base, "bob");
+    const waiting = call(base, bob, "/poll?timeout=5");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(expireIdleSessions(Date.now() + 23 * 3_600_000)).toEqual([]);
+    expect(expireIdleSessions(Date.now() + 25 * 3_600_000)).toEqual(["alice"]);
+    expect((await call(base, alice, "/poll?timeout=1")).status).toBe(401);
+    await stopHub("restart");
+    await waiting;
   });
 });

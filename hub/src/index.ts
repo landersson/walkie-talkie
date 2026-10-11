@@ -52,6 +52,8 @@ function handleShutdown(signal: NodeJS.Signals): void {
     console.log("[shutdown] Hub stopped.");
     process.exit(0);
   });
+  // Drop idle keep-alive connections now; busy ones are closed as their next request arrives
+  server.closeIdleConnections();
   // Force exit after 10 seconds
   setTimeout(() => {
     console.error("[shutdown] Force exit after timeout");

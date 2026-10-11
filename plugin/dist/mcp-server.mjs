@@ -22180,6 +22180,7 @@ var StdioServerTransport = class {
 import fs from "node:fs";
 import http2 from "node:http";
 import https2 from "node:https";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30346,6 +30347,43 @@ var client;
 var joinToken;
 var currentToken = null;
 var currentName = null;
+var SESSIONS_FILE = path.join(
+  process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"),
+  "walkie-talkie",
+  "mcp-sessions.json"
+);
+function sessionKey(name) {
+  return `${client.getBaseUrl()} ${name}`;
+}
+function readSavedSessions() {
+  try {
+    return JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+function writeSavedSessions(sessions) {
+  try {
+    fs.mkdirSync(path.dirname(SESSIONS_FILE), { recursive: true, mode: 448 });
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), { mode: 384 });
+  } catch (e) {
+    console.error(`[walkie-talkie] Could not save session: ${e.message}`);
+  }
+}
+function startSession(name, token) {
+  currentName = name;
+  currentToken = token;
+  writeSavedSessions({ ...readSavedSessions(), [sessionKey(name)]: token });
+}
+function endSession() {
+  if (currentName) {
+    const sessions = readSavedSessions();
+    delete sessions[sessionKey(currentName)];
+    writeSavedSessions(sessions);
+  }
+  currentToken = null;
+  currentName = null;
+}
 var stashedMessages = [];
 function takeStashed() {
   const messages = stashedMessages;
@@ -30356,6 +30394,13 @@ var STANDBY_DEFAULT_SECONDS = 600;
 var STANDBY_PROGRESS_INTERVAL_MS = 3e4;
 var RECONNECT_DELAY_MS = 1e3;
 var standbyGeneration = 0;
+function registrationError(e) {
+  const msg = e.message;
+  if (msg === "Join token required") {
+    return `The hub at ${client.getBaseUrl()} rejected the join token. Check that WALKIE_TALKIE_JOIN_TOKEN matches the hub's join token.`;
+  }
+  return msg;
+}
 function isRestartNotice(m) {
   return m.from === "system" && m.content.startsWith("RADIO_RESTART:");
 }
@@ -30384,7 +30429,7 @@ async function waitForMessages(timeoutSec, signal) {
         reconnecting = true;
       } else if (e.message === "Unauthorized" && reconnecting && currentName) {
         const reg = await client.register(currentName, joinToken, currentToken ?? void 0);
-        currentToken = reg.token;
+        startSession(reg.name, reg.token);
         console.error(`[walkie-talkie] Re-registered as "${reg.name}" after hub restart`);
         continue;
       } else {
@@ -30407,10 +30452,21 @@ function createMcpServer(hubUrl2, joinTok) {
     "Join the Walkie-Talkie hub with a display name. You must join before using other radio tools.",
     { name: external_exports.string().describe("Your display name for this session") },
     async ({ name }) => {
+      if (!joinToken) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Cannot join: the WALKIE_TALKIE_JOIN_TOKEN environment variable is not set for the walkie-talkie MCP server. Ask the user to set it to the hub's join token (e.g. in their shell profile) and restart Claude Code."
+            }
+          ],
+          isError: true
+        };
+      }
       try {
-        const result = await client.register(name, joinToken, currentToken ?? void 0);
-        currentToken = result.token;
-        currentName = result.name;
+        const oldToken = currentToken ?? readSavedSessions()[sessionKey(name)];
+        const result = await client.register(name, joinToken, oldToken);
+        startSession(result.name, result.token);
         return {
           content: [
             {
@@ -30421,7 +30477,7 @@ function createMcpServer(hubUrl2, joinTok) {
         };
       } catch (e) {
         return {
-          content: [{ type: "text", text: `Registration failed: ${e.message}` }],
+          content: [{ type: "text", text: `Registration failed: ${registrationError(e)}` }],
           isError: true
         };
       }
@@ -30528,8 +30584,7 @@ function createMcpServer(hubUrl2, joinTok) {
         }
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
         if (killed) {
-          currentToken = null;
-          currentName = null;
+          endSession();
           return {
             content: [
               {
@@ -30635,8 +30690,7 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
         }
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
         if (killed) {
-          currentToken = null;
-          currentName = null;
+          endSession();
           return {
             content: [
               {
@@ -30675,8 +30729,7 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
       } catch (e) {
         const msg = e.message;
         if (msg === "Unauthorized") {
-          currentToken = null;
-          currentName = null;
+          endSession();
           return {
             content: [
               {
@@ -30884,8 +30937,7 @@ ${channelText}`
     try {
       await client.unregister(currentToken);
       const name = currentName;
-      currentToken = null;
-      currentName = null;
+      endSession();
       return {
         content: [{ type: "text", text: `Unregistered "${name}". Disconnected from hub.` }]
       };
@@ -30908,10 +30960,9 @@ for (let i = 0; i < args.length; i++) {
     i++;
   }
 }
-var joinToken2 = process.env.WALKIE_TALKIE_JOIN_TOKEN;
+var joinToken2 = process.env.WALKIE_TALKIE_JOIN_TOKEN ?? "";
 if (!joinToken2) {
-  console.error("Error: WALKIE_TALKIE_JOIN_TOKEN environment variable is required");
-  process.exit(1);
+  console.error("Warning: WALKIE_TALKIE_JOIN_TOKEN is not set; radio_join will fail until it is");
 }
 var server = createMcpServer(hubUrl, joinToken2);
 var transport = new StdioServerTransport();

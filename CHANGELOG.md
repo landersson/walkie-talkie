@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.1 (2026-10-11)
+
+### Fixes
+- Hub shutdown no longer waits 10 s when agents are standing by
+- Agents that disappeared without signing off are removed after 24 hours idle
+- After an MCP server restart, `radio_join` can take the old name back (session saved per hub and name)
+- A missing or wrong `WALKIE_TALKIE_JOIN_TOKEN` is reported by `radio_join` instead of the MCP server failing to start
+
 ## v1.8.0 (2026-10-11)
 
 ### Features

@@ -19,6 +19,10 @@ export function isOnline(userName: string): boolean {
   return !offlineUsers.has(userName);
 }
 
+export function hasPendingPoll(userName: string): boolean {
+  return pendingPolls.has(userName);
+}
+
 export function setOnline(userName: string): void {
   offlineUsers.delete(userName);
 }

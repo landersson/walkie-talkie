@@ -44,7 +44,16 @@ import {
 } from "./db.js";
 import { addSSEClient, broadcast } from "./events.js";
 import { launchAgent } from "./launcher.js";
-import { addPoll, closeAllPolls, isOnline, onPollDisconnect, removePoll, setOffline, setOnline } from "./polling.js";
+import {
+  addPoll,
+  closeAllPolls,
+  hasPendingPoll,
+  isOnline,
+  onPollDisconnect,
+  removePoll,
+  setOffline,
+  setOnline,
+} from "./polling.js";
 import {
   drainQueue,
   enqueueAndDeliver,
@@ -148,6 +157,7 @@ const handleRegister: RouteHandler = async (req, res) => {
     }
     const role = body.role === "bridge" ? "bridge" : "agent";
     const user = registerUser(body.name, role);
+    lastSeen.set(body.name, Date.now());
     ensureQueue(body.name);
     setOnline(body.name);
     // Auto-join #all
@@ -693,7 +703,41 @@ function authenticateBearer(req: IncomingMessage, expected: string): boolean {
 
 const STALE_GRACE_MS = 30_000; // 30 seconds before auto-unregister
 const RESTORE_GRACE_MS = 120_000; // time for agents to come back after a hub restart
+// Agents not waiting in a poll and silent for this long are assumed gone (busy agents make no
+// requests while they work, so this is long)
+const IDLE_EXPIRY_MS = 24 * 3_600_000;
+const IDLE_CHECK_INTERVAL_MS = 10 * 60_000;
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// Last authenticated request per agent/bridge
+const lastSeen = new Map<string, number>();
+let shuttingDown = false;
+
+function removeStaleUser(userName: string, reason: string): void {
+  const role = getUserRole(userName);
+  removePoll(userName);
+  removeQueue(userName);
+  setOffline(userName);
+  unregisterUser(userName);
+  lastSeen.delete(userName);
+  broadcast({ type: "leave", name: userName, timestamp: Date.now() });
+  if (role === "agent") {
+    notifyBridges(`USER_LEFT: ${userName}`);
+  }
+  console.log(`[auto-unregister] ${userName} (${reason})`);
+}
+
+/** Unregister agents/bridges that aren't polling and haven't made a request for IDLE_EXPIRY_MS. */
+export function expireIdleSessions(now = Date.now()): string[] {
+  const expired: string[] = [];
+  for (const name of getRegisteredUsers()) {
+    if (getUserRole(name) === "human" || hasPendingPoll(name)) continue;
+    if (now - (lastSeen.get(name) ?? now) >= IDLE_EXPIRY_MS) {
+      removeStaleUser(name, "idle");
+      expired.push(name);
+    }
+  }
+  return expired;
+}
 
 /** Unregister `userName` unless it polls again (= comes back online) within `graceMs`. */
 function scheduleStaleRemoval(userName: string, graceMs: number): void {
@@ -705,16 +749,7 @@ function scheduleStaleRemoval(userName: string, graceMs: number): void {
     setTimeout(() => {
       staleTimers.delete(userName);
       if (isUserRegistered(userName) && !isOnline(userName)) {
-        const role = getUserRole(userName);
-        removePoll(userName);
-        removeQueue(userName);
-        setOffline(userName);
-        unregisterUser(userName);
-        broadcast({ type: "leave", name: userName, timestamp: Date.now() });
-        if (role === "agent") {
-          notifyBridges(`USER_LEFT: ${userName}`);
-        }
-        console.log(`[auto-unregister] ${userName} (stale)`);
+        removeStaleUser(userName, "stale");
       }
     }, graceMs),
   );
@@ -737,6 +772,7 @@ function restoreSessions(): void {
     });
     ensureQueue(session.name);
     setOffline(session.name);
+    lastSeen.set(session.name, Date.now());
     for (const ch of new Set(["#all", ...dbGetUserChannels(session.name)])) {
       try {
         joinChannel(ch, session.name);
@@ -758,6 +794,9 @@ function restoreSessions(): void {
  * "stop": everyone is disconnected and sessions are dropped (RADIO_KILLED).
  */
 export function prepareShutdown(mode: "restart" | "stop"): void {
+  // From now on new requests are dropped (see handleRequest), so agents re-polling right after
+  // their poll ends can't keep the server from closing; they reconnect once the hub is back
+  shuttingDown = true;
   const content =
     mode === "restart"
       ? "RADIO_RESTART: The hub is restarting and should be back within a few seconds. You stay on the air with your current session: keep calling radio_standby, and if it fails, wait a few seconds and try again. Do not call radio_join or radio_out. If the hub is still unreachable after a few minutes, stop and tell the user."
@@ -801,9 +840,15 @@ export function createHubServer(
     scheduleStaleRemoval(userName, STALE_GRACE_MS);
   });
 
+  shuttingDown = false;
   restoreSessions();
+  setInterval(() => expireIdleSessions(), IDLE_CHECK_INTERVAL_MS).unref();
 
   function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    if (shuttingDown) {
+      req.socket.destroy();
+      return;
+    }
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const path = url.pathname;
 
@@ -898,6 +943,7 @@ export function createHubServer(
         return;
       }
       // Any authenticated request proves the agent is alive
+      lastSeen.set(userName, Date.now());
       if (!isOnline(userName)) {
         setOnline(userName);
         broadcast({ type: "status", name: userName, online: true, timestamp: Date.now() });

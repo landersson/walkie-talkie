@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -52,6 +53,52 @@ let joinToken: string;
 let currentToken: string | null = null;
 let currentName: string | null = null;
 
+// Tokens are saved per hub and name, so a restarted MCP server (e.g. after /mcp reconnect)
+// can take its name back instead of finding it held by its own previous session.
+const SESSIONS_FILE = path.join(
+  process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"),
+  "walkie-talkie",
+  "mcp-sessions.json",
+);
+
+function sessionKey(name: string): string {
+  return `${client.getBaseUrl()} ${name}`;
+}
+
+function readSavedSessions(): Record<string, string> {
+  try {
+    return JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function writeSavedSessions(sessions: Record<string, string>): void {
+  try {
+    fs.mkdirSync(path.dirname(SESSIONS_FILE), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), { mode: 0o600 });
+  } catch (e) {
+    console.error(`[walkie-talkie] Could not save session: ${(e as Error).message}`);
+  }
+}
+
+function startSession(name: string, token: string): void {
+  currentName = name;
+  currentToken = token;
+  writeSavedSessions({ ...readSavedSessions(), [sessionKey(name)]: token });
+}
+
+/** Forget the current session (signed off or disconnected by the hub). */
+function endSession(): void {
+  if (currentName) {
+    const sessions = readSavedSessions();
+    delete sessions[sessionKey(currentName)];
+    writeSavedSessions(sessions);
+  }
+  currentToken = null;
+  currentName = null;
+}
+
 type PolledMessage = NonNullable<Awaited<ReturnType<HubClient["poll"]>>>["messages"][number];
 
 // Messages that arrived for a radio_standby call the client had already given up on
@@ -70,6 +117,14 @@ const RECONNECT_DELAY_MS = 1000;
 // Only the newest radio_standby call keeps polling; an older one still running (e.g. moved to
 // the background) gives up, so the two don't keep ending each other's polls on the hub.
 let standbyGeneration = 0;
+
+function registrationError(e: unknown): string {
+  const msg = (e as Error).message;
+  if (msg === "Join token required") {
+    return `The hub at ${client.getBaseUrl()} rejected the join token. Check that WALKIE_TALKIE_JOIN_TOKEN matches the hub's join token.`;
+  }
+  return msg;
+}
 
 // The hub announces a restart with a RADIO_RESTART system message. The plugin handles it
 // (keeps waiting and reconnects), so the agent never sees it.
@@ -109,7 +164,7 @@ async function waitForMessages(timeoutSec: number, signal: AbortSignal): Promise
       } else if ((e as Error).message === "Unauthorized" && reconnecting && currentName) {
         // The hub came back without our session: take our name again
         const reg = await client.register(currentName, joinToken, currentToken ?? undefined);
-        currentToken = reg.token;
+        startSession(reg.name, reg.token);
         console.error(`[walkie-talkie] Re-registered as "${reg.name}" after hub restart`);
         continue;
       } else {
@@ -135,10 +190,21 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     "Join the Walkie-Talkie hub with a display name. You must join before using other radio tools.",
     { name: z.string().describe("Your display name for this session") },
     async ({ name }) => {
+      if (!joinToken) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Cannot join: the WALKIE_TALKIE_JOIN_TOKEN environment variable is not set for the walkie-talkie MCP server. Ask the user to set it to the hub's join token (e.g. in their shell profile) and restart Claude Code.",
+            },
+          ],
+          isError: true,
+        };
+      }
       try {
-        const result = await client.register(name, joinToken, currentToken ?? undefined);
-        currentToken = result.token;
-        currentName = result.name;
+        const oldToken = currentToken ?? readSavedSessions()[sessionKey(name)];
+        const result = await client.register(name, joinToken, oldToken);
+        startSession(result.name, result.token);
         return {
           content: [
             {
@@ -149,7 +215,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: `Registration failed: ${(e as Error).message}` }],
+          content: [{ type: "text" as const, text: `Registration failed: ${registrationError(e)}` }],
           isError: true,
         };
       }
@@ -268,8 +334,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         }
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
         if (killed) {
-          currentToken = null;
-          currentName = null;
+          endSession();
           return {
             content: [
               {
@@ -389,8 +454,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         // Check for kill signal from operator
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
         if (killed) {
-          currentToken = null;
-          currentName = null;
+          endSession();
           return {
             content: [
               {
@@ -434,8 +498,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       } catch (e) {
         const msg = (e as Error).message;
         if (msg === "Unauthorized") {
-          currentToken = null;
-          currentName = null;
+          endSession();
           return {
             content: [
               {
@@ -657,8 +720,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     try {
       await client.unregister(currentToken);
       const name = currentName;
-      currentToken = null;
-      currentName = null;
+      endSession();
       return {
         content: [{ type: "text" as const, text: `Unregistered "${name}". Disconnected from hub.` }],
       };
