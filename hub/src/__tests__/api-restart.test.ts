@@ -138,3 +138,36 @@ describe("shutdown and idle sessions", () => {
     await waiting;
   });
 });
+
+describe("name already registered", () => {
+  async function registerError(base: string, name: string): Promise<{ status: number; error: string }> {
+    const res = await fetch(`${base}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${JOIN}` },
+      body: JSON.stringify({ name }),
+    });
+    return { status: res.status, error: ((await res.json()) as { error: string }).error };
+  }
+
+  it("says what to do, depending on the existing session", async () => {
+    const base = await startHub();
+    const alice = await register(base, "alice");
+    const active = await registerError(base, "alice");
+    expect(active.status).toBe(409);
+    expect(active.error).toMatch(/already registered and active\. Choose another name/);
+
+    // The poll connection drops (e.g. the agent's MCP server was restarted)
+    const ac = new AbortController();
+    const poll = fetch(`${base}/poll?timeout=10`, {
+      headers: { Authorization: `Bearer ${alice}` },
+      signal: ac.signal,
+    }).catch(() => null);
+    await new Promise((r) => setTimeout(r, 50));
+    ac.abort();
+    await poll;
+    await new Promise((r) => setTimeout(r, 100));
+    const dropped = await registerError(base, "alice");
+    expect(dropped.status).toBe(409);
+    expect(dropped.error).toMatch(/lost its connection\. The name is released in (30|29|28) s; try again then\./);
+  });
+});

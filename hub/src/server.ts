@@ -143,7 +143,7 @@ const handleRegister: RouteHandler = async (req, res) => {
     if (isUserRegistered(body.name)) {
       const existingToken = getUserToken(body.name);
       if (!body.oldToken || body.oldToken !== existingToken) {
-        return sendError(res, 409, `User "${body.name}" is already registered`);
+        return sendError(res, 409, nameTakenMessage(body.name));
       }
       removePoll(body.name);
       removeQueue(body.name);
@@ -155,6 +155,7 @@ const handleRegister: RouteHandler = async (req, res) => {
       clearTimeout(graceTimer);
       staleTimers.delete(body.name);
     }
+    staleDeadlines.delete(body.name);
     const role = body.role === "bridge" ? "bridge" : "agent";
     const user = registerUser(body.name, role);
     lastSeen.set(body.name, Date.now());
@@ -708,6 +709,8 @@ const RESTORE_GRACE_MS = 120_000; // time for agents to come back after a hub re
 const IDLE_EXPIRY_MS = 24 * 3_600_000;
 const IDLE_CHECK_INTERVAL_MS = 10 * 60_000;
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// When each pending stale removal fires, to tell a rejoining agent how long to wait
+const staleDeadlines = new Map<string, number>();
 // Last authenticated request per agent/bridge
 const lastSeen = new Map<string, number>();
 let shuttingDown = false;
@@ -724,6 +727,21 @@ function removeStaleUser(userName: string, reason: string): void {
     notifyBridges(`USER_LEFT: ${userName}`);
   }
   console.log(`[auto-unregister] ${userName} (${reason})`);
+}
+
+/** Explains to an agent trying to register `name` why it can't, and what to do about it. */
+function nameTakenMessage(name: string): string {
+  const taken = `User "${name}" is already registered`;
+  if (getUserRole(name) === "human") return `${taken} by a human on the dashboard. Choose another name.`;
+  const deadline = staleDeadlines.get(name);
+  if (!isOnline(name) && deadline) {
+    const seconds = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+    return `${taken}, but its previous session lost its connection. The name is released in ${seconds} s; try again then.`;
+  }
+  if (!isOnline(name)) {
+    return `${taken}, but not connected. A human can kick it from the dashboard; otherwise the name is released after 24 h of inactivity.`;
+  }
+  return `${taken} and active. Choose another name, or ask a human to kick the existing session from the dashboard.`;
 }
 
 /** Unregister agents/bridges that aren't polling and haven't made a request for IDLE_EXPIRY_MS. */
@@ -743,11 +761,13 @@ export function expireIdleSessions(now = Date.now()): string[] {
 function scheduleStaleRemoval(userName: string, graceMs: number): void {
   const existing = staleTimers.get(userName);
   if (existing) clearTimeout(existing);
+  staleDeadlines.set(userName, Date.now() + graceMs);
 
   staleTimers.set(
     userName,
     setTimeout(() => {
       staleTimers.delete(userName);
+      staleDeadlines.delete(userName);
       if (isUserRegistered(userName) && !isOnline(userName)) {
         removeStaleUser(userName, "stale");
       }
