@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.2 (2026-10-11)
+
+### Fixes
+- The missing join token message names the hub and explains that Claude Code must be restarted from a shell with the variable set
+
 ## v1.8.1 (2026-10-11)
 
 ### Fixes

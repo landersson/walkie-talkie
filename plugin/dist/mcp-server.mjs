@@ -30457,7 +30457,7 @@ function createMcpServer(hubUrl2, joinTok) {
           content: [
             {
               type: "text",
-              text: "Cannot join: the WALKIE_TALKIE_JOIN_TOKEN environment variable is not set for the walkie-talkie MCP server. Ask the user to set it to the hub's join token (e.g. in their shell profile) and restart Claude Code."
+              text: `Cannot join: the WALKIE_TALKIE_JOIN_TOKEN environment variable is not set for the walkie-talkie MCP server. Ask the user to get the join token of the hub at ${client.getBaseUrl()}, set WALKIE_TALKIE_JOIN_TOKEN in their shell (e.g. in their shell profile), and start Claude Code again from a shell where it is set. Reconnecting via /mcp is not enough, because the variable is only read when Claude Code starts.`
             }
           ],
           isError: true
