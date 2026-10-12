@@ -12,11 +12,35 @@ interface RequestOptions {
 }
 
 const CONNECT_RETRY_MS = 15_000;
+// A host that is down (e.g. rebooting) doesn't refuse connections, they just hang
+const CONNECT_TIMEOUT_MS = 10_000;
+
+const UNREACHABLE_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EHOSTDOWN",
+  "EAI_AGAIN",
+]);
+
+type NetError = NodeJS.ErrnoException & { errors?: unknown[] };
 
 /** True when the hub could not be reached at all (down or restarting), as opposed to an HTTP error. */
 export function isHubUnreachable(e: unknown): boolean {
-  const code = (e as NodeJS.ErrnoException)?.code;
-  return code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE" || code === "EHOSTUNREACH";
+  const err = e as NetError;
+  if (UNREACHABLE_CODES.has(err?.code ?? "")) return true;
+  // Node tries IPv4 and IPv6 addresses in parallel and reports the failures as one AggregateError
+  return Array.isArray(err?.errors) && err.errors.some(isHubUnreachable);
+}
+
+/** True when the request failed before it reached the hub, so it is safe to send again. */
+function isConnectFailure(e: unknown): boolean {
+  const err = e as NetError;
+  if (Array.isArray(err?.errors)) return err.errors.length > 0 && err.errors.every(isConnectFailure);
+  return err?.syscall === "connect" || err?.syscall === "getaddrinfo";
 }
 
 interface HubResponse<T = unknown> {
@@ -41,8 +65,8 @@ export class HubClient {
       try {
         return await this.requestOnce<T>(options);
       } catch (e) {
-        // Only a refused connection is safe to retry: the request never reached the hub
-        if ((e as NodeJS.ErrnoException).code !== "ECONNREFUSED" || Date.now() >= deadline) throw e;
+        // Only a failed connection is safe to retry: the request never reached the hub
+        if (!isConnectFailure(e) || Date.now() >= deadline) throw e;
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
@@ -93,8 +117,32 @@ export class HubClient {
         },
       );
 
-      req.on("error", reject);
+      const connectTimeout = (): NodeJS.ErrnoException => {
+        const err: NodeJS.ErrnoException = new Error(`connect ETIMEDOUT ${this.baseUrl.host}`);
+        err.code = "ETIMEDOUT";
+        err.syscall = "connect";
+        return err;
+      };
+      req.on("socket", (socket) => {
+        if (!socket.connecting) return;
+        const timer = setTimeout(() => req.destroy(connectTimeout()), CONNECT_TIMEOUT_MS);
+        socket.once("connect", () => clearTimeout(timer));
+        socket.once("close", () => clearTimeout(timer));
+      });
+      req.on("error", (e: NetError) => {
+        // AggregateErrors have an empty message; always say what went wrong
+        if (!e.message) {
+          const codes = [...new Set((e.errors ?? []).map((x) => (x as NetError).code).filter(Boolean))];
+          e.message = `cannot reach ${this.baseUrl.host} (${codes.join(", ") || e.code || e.name})`;
+        }
+        reject(e);
+      });
       req.on("timeout", () => {
+        // Still connecting: the hub's host isn't answering at all (retryable, see isConnectFailure)
+        if (req.socket?.connecting) {
+          req.destroy(connectTimeout());
+          return;
+        }
         req.destroy();
         reject(new Error("Request timed out"));
       });

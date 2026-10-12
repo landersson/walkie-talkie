@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.9.2 (2026-10-12)
+
+### Fixes
+- `radio_standby` keeps waiting while the hub's host is down (connections time out rather than being refused, e.g. during a reboot) instead of failing with an empty "Poll failed:"
+- Connection errors always include a reason; sends retry briefly when the hub's host doesn't answer
+
 ## v1.9.1 (2026-10-12)
 
 ### Fixes

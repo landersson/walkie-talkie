@@ -30101,9 +30101,26 @@ var EMPTY_COMPLETION_RESULT = {
 import http from "node:http";
 import https from "node:https";
 var CONNECT_RETRY_MS = 15e3;
+var CONNECT_TIMEOUT_MS = 1e4;
+var UNREACHABLE_CODES = /* @__PURE__ */ new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EHOSTDOWN",
+  "EAI_AGAIN"
+]);
 function isHubUnreachable(e) {
-  const code = e?.code;
-  return code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE" || code === "EHOSTUNREACH";
+  const err = e;
+  if (UNREACHABLE_CODES.has(err?.code ?? "")) return true;
+  return Array.isArray(err?.errors) && err.errors.some(isHubUnreachable);
+}
+function isConnectFailure(e) {
+  const err = e;
+  if (Array.isArray(err?.errors)) return err.errors.length > 0 && err.errors.every(isConnectFailure);
+  return err?.syscall === "connect" || err?.syscall === "getaddrinfo";
 }
 var HubClient = class {
   baseUrl;
@@ -30119,7 +30136,7 @@ var HubClient = class {
       try {
         return await this.requestOnce(options);
       } catch (e) {
-        if (e.code !== "ECONNREFUSED" || Date.now() >= deadline) throw e;
+        if (!isConnectFailure(e) || Date.now() >= deadline) throw e;
         await new Promise((resolve) => setTimeout(resolve, 1e3));
       }
     }
@@ -30165,8 +30182,30 @@ var HubClient = class {
           });
         }
       );
-      req.on("error", reject);
+      const connectTimeout = () => {
+        const err = new Error(`connect ETIMEDOUT ${this.baseUrl.host}`);
+        err.code = "ETIMEDOUT";
+        err.syscall = "connect";
+        return err;
+      };
+      req.on("socket", (socket) => {
+        if (!socket.connecting) return;
+        const timer = setTimeout(() => req.destroy(connectTimeout()), CONNECT_TIMEOUT_MS);
+        socket.once("connect", () => clearTimeout(timer));
+        socket.once("close", () => clearTimeout(timer));
+      });
+      req.on("error", (e) => {
+        if (!e.message) {
+          const codes = [...new Set((e.errors ?? []).map((x) => x.code).filter(Boolean))];
+          e.message = `cannot reach ${this.baseUrl.host} (${codes.join(", ") || e.code || e.name})`;
+        }
+        reject(e);
+      });
       req.on("timeout", () => {
+        if (req.socket?.connecting) {
+          req.destroy(connectTimeout());
+          return;
+        }
         req.destroy();
         reject(new Error("Request timed out"));
       });

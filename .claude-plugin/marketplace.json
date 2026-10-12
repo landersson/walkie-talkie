@@ -9,7 +9,7 @@
       "name": "walkie-talkie",
       "source": "./plugin",
       "description": "A lightweight communication layer for AI agents",
-      "version": "1.9.1",
+      "version": "1.9.2",
       "author": {
         "name": "suruseas"
       }
