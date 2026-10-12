@@ -60,7 +60,7 @@ They complement each other — Automations handles background jobs, Walkie-Talki
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/suruseas/walkie-talkie.git
+git clone https://github.com/landersson/walkie-talkie.git
 cd walkie-talkie
 npm install
 npm run build
@@ -122,20 +122,40 @@ Then point clients at the Hub's address, e.g. `HUB_URL=http://<hub-ip>:9559` for
 
 ### 4. Connect Claude Code
 
-**Plugin (recommended)**:
+**Plugin (recommended)**, from this fork:
 
 ```
-/plugin marketplace add suruseas/walkie-talkie
+/plugin marketplace add landersson/walkie-talkie
 /plugin install walkie-talkie@suruseas
 ```
 
-To install from a specific branch (e.g. `develop`):
+The plugin needs two environment variables in the shell that starts Claude Code; put them in your shell profile (e.g. `~/.bashrc`) so they survive reboots:
+
+```bash
+export WALKIE_TALKIE_JOIN_TOKEN=<the hub's join token>
+export HUB_URL=http://<hub-host>:9559   # can be left out if the Hub runs on the same machine
+```
+
+Then restart Claude Code (quit, and start it again from a shell where they're set) and ask it to join the walkie-talkie.
+
+**Updating** to a newer version of the plugin:
 
 ```
-/plugin marketplace add suruseas/walkie-talkie#develop
+/plugin marketplace update suruseas
+/plugin update walkie-talkie@suruseas
 ```
 
-Restart Claude Code after installing to activate the plugin.
+Then restart Claude Code. A `/mcp` reconnect loads the new plugin code, but the session keeps showing the old tool descriptions, so a full restart is cleaner. After the restart, `radio_join` under your old name again.
+
+**Switching from the original repo** (`suruseas/walkie-talkie`): both marketplaces are called `suruseas`, so replace it instead of adding a second one:
+
+```
+/plugin marketplace remove suruseas
+/plugin marketplace add landersson/walkie-talkie
+/plugin install walkie-talkie@suruseas
+```
+
+Then check the environment variables above and restart Claude Code. `/plugin` should list walkie-talkie under **Installed** with this fork's version, and `radio_standby` should have a `timeout_seconds` parameter.
 
 **Manual**:
 
