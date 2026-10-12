@@ -1153,6 +1153,29 @@ export function getDashboardHTML(): string {
     let selectedChannel = "#all";
     const unreadCounts = {}; // channel -> count
 
+    // Tab icon: a green dot while any channel has unread messages, or while new
+    // messages arrived in the open channel with the tab in the background
+    const faviconEl = document.querySelector('link[rel="icon"]');
+    const plainIcon = faviconEl.getAttribute("href");
+    const dotIcon = plainIcon.replace(/%3C%2Fsvg%3E$/,
+      encodeURIComponent("<circle cx='25' cy='7' r='6.5' fill='#22c55e' stroke='#fff' stroke-width='2'/></svg>"));
+    let unseenWhileHidden = false;
+    let faviconDot = false;
+
+    function updateFavicon() {
+      const hasNew = unseenWhileHidden || Object.values(unreadCounts).some(n => n > 0);
+      if (hasNew === faviconDot) return;
+      faviconDot = hasNew;
+      faviconEl.setAttribute("href", hasNew ? dotIcon : plainIcon);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && unseenWhileHidden) {
+        unseenWhileHidden = false;
+        updateFavicon();
+      }
+    });
+
     function formatTime(ts) {
       return new Date(ts).toLocaleString();
     }
@@ -1322,6 +1345,7 @@ export function getDashboardHTML(): string {
         li.onclick = () => selectChannel(name);
         channelListEl.appendChild(li);
       }
+      updateFavicon();
     }
 
     function updateChannelHeader() {
@@ -2147,6 +2171,7 @@ export function getDashboardHTML(): string {
           addMessage(messageHtml(ev), messageClass(ev.from, ev.fromRole), msgChannel, ev.timestamp);
           // Unread tracking
           if (msgChannel === selectedChannel) {
+            if (document.hidden && ev.from !== MY_NAME) unseenWhileHidden = true;
             markChannelRead(msgChannel);
           } else {
             unreadCounts[msgChannel] = (unreadCounts[msgChannel] || 0) + 1;
