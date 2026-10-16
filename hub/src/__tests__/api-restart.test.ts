@@ -107,6 +107,28 @@ describe("hub restart", () => {
     expect(await register(base, "alice")).toBeTruthy();
   });
 
+  it("keeps agents that are busy (not polling) across a restart until they're idle for 24 h", async () => {
+    let base = await startHub();
+    const alice = await register(base, "alice");
+    const bob = await register(base, "bob");
+    await stopHub("restart");
+    base = await startHub();
+
+    // alice is mid-task: no poll and no countdown to removal, and messages to her are queued
+    const res = await fetch(`${base}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${JOIN}` },
+      body: JSON.stringify({ name: "alice" }),
+    });
+    expect(((await res.json()) as { error: string }).error).toMatch(/already registered, but not connected/);
+    expect((await call(base, bob, "/send", { to: "@alice", content: "while you were busy" })).status).toBe(200);
+    expect(expireIdleSessions(Date.now() + 23 * 3_600_000)).toEqual([]);
+
+    const body = (await (await call(base, alice, "/poll?timeout=1")).json()) as { messages: { content: string }[] };
+    expect(body.messages.map((m) => m.content)).toEqual(["while you were busy"]);
+    expect(expireIdleSessions(Date.now() + 25 * 3_600_000).sort()).toEqual(["alice", "bob"]);
+  });
+
   it("forgets unregistered agents", async () => {
     let base = await startHub();
     const alice = await register(base, "alice");

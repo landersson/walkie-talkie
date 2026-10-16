@@ -744,7 +744,6 @@ function authenticateBearer(req: IncomingMessage, expected: string): boolean {
 }
 
 const STALE_GRACE_MS = 30_000; // 30 seconds before auto-unregister
-const RESTORE_GRACE_MS = 120_000; // time for agents to come back after a hub restart
 // Agents not waiting in a poll and silent for this long are assumed gone (busy agents make no
 // requests while they work, so this is long)
 const IDLE_EXPIRY_MS = 24 * 3_600_000;
@@ -818,8 +817,9 @@ function scheduleStaleRemoval(userName: string, graceMs: number): void {
 
 /**
  * Bring back agent/bridge sessions (and their undelivered messages) saved before the last
- * shutdown, so they can carry on with their old token. They start offline and are removed
- * if they don't poll again within RESTORE_GRACE_MS.
+ * shutdown, so they can carry on with their old token. They start offline until they poll
+ * again. Agents busy with a long task may not poll for a while, so only the idle expiry
+ * removes them, as it would have without the restart.
  */
 function restoreSessions(): void {
   const pending = dbTakePendingMessages();
@@ -844,7 +844,6 @@ function restoreSessions(): void {
     for (const message of pending.get(session.name) ?? []) {
       enqueueAndDeliver(session.name, message);
     }
-    scheduleStaleRemoval(session.name, RESTORE_GRACE_MS);
     console.log(`[restore] ${session.name}`);
   }
 }
