@@ -1,3 +1,5 @@
+import { renderMarkdown } from "./markdown.js";
+
 export function getDashboardHTML(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -662,6 +664,92 @@ export function getDashboardHTML(): string {
     word-break: break-word;
     color: var(--text-primary);
   }
+  .msg .content.md {
+    white-space: normal;
+  }
+  .content.md p {
+    margin: 0 0 6px;
+  }
+  .content.md > :last-child {
+    margin-bottom: 0;
+  }
+  .content.md ul, .content.md ol {
+    margin: 2px 0 6px;
+    padding-left: 22px;
+  }
+  .content.md li ul, .content.md li ol {
+    margin: 2px 0;
+  }
+  .content.md li {
+    margin: 1px 0;
+  }
+  .content.md strong {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .content.md code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    word-break: break-word;
+  }
+  .content.md pre {
+    margin: 4px 0 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    overflow-x: auto;
+  }
+  .content.md pre code {
+    padding: 0;
+    border: none;
+    background: none;
+    white-space: pre;
+  }
+  .content.md .md-table {
+    overflow-x: auto;
+    margin: 4px 0 8px;
+  }
+  .content.md table {
+    border-collapse: collapse;
+    font-size: 0.95em;
+  }
+  .content.md th, .content.md td {
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .content.md th {
+    background: var(--bg-raised);
+    font-weight: 600;
+  }
+  .content.md blockquote {
+    margin: 4px 0 8px;
+    padding: 2px 10px;
+    border-left: 3px solid var(--border);
+    color: var(--text-secondary);
+  }
+  .content.md .md-h {
+    font-weight: 700;
+    margin: 6px 0 4px;
+  }
+  .content.md .md-h1 { font-size: 1.2em; }
+  .content.md .md-h2 { font-size: 1.1em; }
+  .content.md hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 8px 0;
+  }
+  .content.md a, .msg .content a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
   .msg.message {
     background: var(--bg-surface);
     border-color: var(--border-subtle);
@@ -1068,6 +1156,7 @@ export function getDashboardHTML(): string {
     <div class="header-spacer"></div>
     <span class="whoami" id="whoami"></span>
     <button class="filter-btn" id="switch-user-btn">Switch user</button>
+    <button class="filter-btn" id="markdown-btn" title="Show agents' Markdown formatted (on) or as plain text (off)">Markdown</button>
     <button class="filter-btn" id="filter-btn">My messages</button>
     <button class="filter-btn" id="goto-last-btn" title="Scroll to the newest message">Go to last</button>
     <button class="clear-btn" id="clear-btn" title="Clear this channel's messages from this tab (nothing is deleted; reload to see them again)">Clear</button>
@@ -1482,9 +1571,33 @@ export function getDashboardHTML(): string {
         '<span class="channel-tag">' + (m.channel || "#all") + '</span>' +
         '<span class="from">' + m.from + '</span> ' +
         '<span class="to">&rarr; ' + m.to + '</span>' +
-        '<div class="content">' + m.content.replace(/</g, "&lt;") + '</div>' +
+        '<div class="content' + (markdownOn ? " md" : "") + '" data-raw="' + escapeHtml(m.content) + '">' + contentHtml(m.content) + '</div>' +
         renderImageTag(m.image);
     }
+
+    // Agents write Markdown; the Markdown button switches between formatted and plain text
+    ${renderMarkdown.toString()}
+    const MARKDOWN_KEY = "walkie-talkie-markdown";
+    let markdownOn = true;
+    try { markdownOn = localStorage.getItem(MARKDOWN_KEY) !== "off"; } catch {}
+    const markdownBtn = document.getElementById("markdown-btn");
+    markdownBtn.classList.toggle("active", markdownOn);
+
+    function contentHtml(text) {
+      return markdownOn ? renderMarkdown(text) : escapeHtml(text);
+    }
+
+    markdownBtn.onclick = () => {
+      markdownOn = !markdownOn;
+      markdownBtn.classList.toggle("active", markdownOn);
+      try { localStorage.setItem(MARKDOWN_KEY, markdownOn ? "on" : "off"); } catch {}
+      const keepBottom = atBottom;
+      for (const el of messagesEl.querySelectorAll(".content[data-raw]")) {
+        el.classList.toggle("md", markdownOn);
+        el.innerHTML = contentHtml(el.dataset.raw);
+      }
+      if (keepBottom) scrollBottom();
+    };
 
     function addMessage(html, cls, channel, ts) {
       clearEmpty();
@@ -1657,8 +1770,10 @@ export function getDashboardHTML(): string {
           canvas.width = nw;
           canvas.height = nh;
           canvas.getContext("2d").drawImage(img, 0, 0, nw, nh);
-          const resized = canvas.toDataURL("image/png");
-          callback(resized.split(",")[1], "image/png");
+          // Photos stay JPEG (a PNG of a photo is several times larger)
+          const outType = file.type === "image/jpeg" ? "image/jpeg" : "image/png";
+          const resized = canvas.toDataURL(outType, 0.9);
+          callback(resized.split(",")[1], outType);
         };
         img.src = dataUrl;
       };
