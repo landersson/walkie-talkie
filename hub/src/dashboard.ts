@@ -724,6 +724,7 @@ export function getDashboardHTML(): string {
   /* Message area wrapper */
   .message-area {
     flex: 1;
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -839,6 +840,44 @@ export function getDashboardHTML(): string {
   }
   .input-bar textarea:focus {
     border-color: var(--accent);
+  }
+  .attach-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: transparent;
+    color: var(--text-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+  }
+  .attach-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .message-area.drop-active::after {
+    content: "Drop an image to attach it";
+    position: absolute;
+    inset: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 2px dashed var(--accent);
+    border-radius: 12px;
+    pointer-events: none;
+    z-index: 50;
+  }
+  #image-preview .image-error {
+    font-size: 12px;
+    color: var(--red);
   }
   .send-btn {
     font-family: var(--font);
@@ -1058,8 +1097,10 @@ export function getDashboardHTML(): string {
         <span class="input-tag recipient" id="recipient-tag">@all</span>
         <div class="input-bar-wrapper">
           <div class="mention-popup" id="mention-popup"></div>
-          <textarea id="send-input" placeholder="Send a message... (type @ to mention)" rows="1"></textarea>
+          <textarea id="send-input" placeholder="Send a message... (type @ to mention; paste or drop an image)" rows="1"></textarea>
         </div>
+        <button class="attach-btn" id="attach-btn" title="Attach an image (or paste or drop one)" aria-label="Attach an image"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+        <input type="file" id="attach-input" accept="image/*" hidden>
         <button class="send-btn" id="send-btn">Send</button>
       </div>
     </div>
@@ -1593,19 +1634,23 @@ export function getDashboardHTML(): string {
     const MAX_IMAGE_SIZE = 1024; // max長辺 px
     let pendingImage = null; // { data, mimeType }
 
-    function resizeImage(file, maxSize, callback) {
+    // Types agents can read; anything else is converted to PNG
+    const AGENT_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+    function resizeImage(file, maxSize, callback, onError) {
       const reader = new FileReader();
       reader.onload = () => {
         const dataUrl = reader.result;
         const img = new Image();
+        img.onerror = () => { if (onError) onError(); };
         img.onload = () => {
           const w = img.width;
           const h = img.height;
-          if (w <= maxSize && h <= maxSize) {
-            callback(dataUrl.split(",")[1]);
+          if (w <= maxSize && h <= maxSize && AGENT_IMAGE_TYPES.includes(file.type)) {
+            callback(dataUrl.split(",")[1], file.type);
             return;
           }
-          const scale = maxSize / Math.max(w, h);
+          const scale = Math.min(1, maxSize / Math.max(w, h));
           const nw = Math.round(w * scale);
           const nh = Math.round(h * scale);
           const canvas = document.createElement("canvas");
@@ -1613,10 +1658,11 @@ export function getDashboardHTML(): string {
           canvas.height = nh;
           canvas.getContext("2d").drawImage(img, 0, 0, nw, nh);
           const resized = canvas.toDataURL("image/png");
-          callback(resized.split(",")[1]);
+          callback(resized.split(",")[1], "image/png");
         };
         img.src = dataUrl;
       };
+      reader.onerror = () => { if (onError) onError(); };
       reader.readAsDataURL(file);
     }
     const imagePreviewEl = document.getElementById("image-preview");
@@ -1636,6 +1682,29 @@ export function getDashboardHTML(): string {
       }
     }
 
+    // Show a short error beside any attached image, then clear it
+    let imageErrorTimer = null;
+    function showImageError(text) {
+      renderImagePreview();
+      imagePreviewEl.insertAdjacentHTML("beforeend", '<span class="image-error">' + escapeHtml(text) + '</span>');
+      imagePreviewEl.classList.add("active");
+      clearTimeout(imageErrorTimer);
+      imageErrorTimer = setTimeout(renderImagePreview, 4000);
+    }
+
+    // Attach an image file (pasted, dropped or picked) to the next message
+    function attachImageFile(file) {
+      if (!file.type.startsWith("image/")) {
+        showImageError(file.name + " is not an image. Only images can be attached.");
+        return;
+      }
+      resizeImage(file, MAX_IMAGE_SIZE, (base64, mimeType) => {
+        pendingImage = { data: base64, mimeType };
+        renderImagePreview();
+        sendInputEl.focus();
+      }, () => showImageError("Can't read " + (file.name || "that image") + " in this browser. Try PNG or JPEG."));
+    }
+
     sendInputEl.addEventListener("paste", (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
@@ -1643,15 +1712,50 @@ export function getDashboardHTML(): string {
         if (item.type.startsWith("image/")) {
           e.preventDefault();
           const blob = item.getAsFile();
-          if (!blob) return;
-          resizeImage(blob, MAX_IMAGE_SIZE, (base64) => {
-            pendingImage = { data: base64, mimeType: "image/png" };
-            renderImagePreview();
-          });
+          if (blob) attachImageFile(blob);
           return;
         }
       }
     });
+
+    // Drag and drop an image anywhere on the messages or input area
+    const messageAreaEl = document.querySelector(".message-area");
+    let dragDepth = 0;
+    const isFileDrag = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+    messageAreaEl.addEventListener("dragenter", (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      messageAreaEl.classList.add("drop-active");
+    });
+    messageAreaEl.addEventListener("dragover", (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    messageAreaEl.addEventListener("dragleave", (e) => {
+      if (!isFileDrag(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) messageAreaEl.classList.remove("drop-active");
+    });
+    messageAreaEl.addEventListener("drop", (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      messageAreaEl.classList.remove("drop-active");
+      const files = [...e.dataTransfer.files];
+      if (files.length) attachImageFile(files.find(f => f.type.startsWith("image/")) || files[0]);
+    });
+    // A file dropped elsewhere on the page shouldn't navigate away from the dashboard
+    window.addEventListener("dragover", (e) => { if (isFileDrag(e)) e.preventDefault(); });
+    window.addEventListener("drop", (e) => { if (isFileDrag(e)) e.preventDefault(); });
+
+    const attachInputEl = document.getElementById("attach-input");
+    document.getElementById("attach-btn").onclick = () => attachInputEl.click();
+    attachInputEl.onchange = () => {
+      if (attachInputEl.files.length) attachImageFile(attachInputEl.files[0]);
+      attachInputEl.value = "";
+    };
 
     let mentionActive = false;
     let mentionIndex = 0;
