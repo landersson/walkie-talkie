@@ -50,9 +50,12 @@ interface HubResponse<T = unknown> {
 
 export class HubClient {
   private baseUrl: URL;
+  // A path in the hub URL selects a project, e.g. http://hub:9559/p/myproject
+  private basePath: string;
 
   constructor(hubUrl: string) {
     this.baseUrl = new URL(hubUrl);
+    this.basePath = this.baseUrl.pathname.replace(/\/+$/, "");
   }
 
   getBaseUrl(): string {
@@ -93,7 +96,7 @@ export class HubClient {
         {
           hostname: this.baseUrl.hostname,
           port: this.baseUrl.port,
-          path: options.path,
+          path: this.basePath + options.path,
           method: options.method,
           headers,
           timeout: options.timeoutMs ?? 10_000,

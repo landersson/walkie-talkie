@@ -30124,8 +30124,11 @@ function isConnectFailure(e) {
 }
 var HubClient = class {
   baseUrl;
+  // A path in the hub URL selects a project, e.g. http://hub:9559/p/myproject
+  basePath;
   constructor(hubUrl2) {
     this.baseUrl = new URL(hubUrl2);
+    this.basePath = this.baseUrl.pathname.replace(/\/+$/, "");
   }
   getBaseUrl() {
     return this.baseUrl.toString().replace(/\/$/, "");
@@ -30159,7 +30162,7 @@ var HubClient = class {
         {
           hostname: this.baseUrl.hostname,
           port: this.baseUrl.port,
-          path: options.path,
+          path: this.basePath + options.path,
           method: options.method,
           headers,
           timeout: options.timeoutMs ?? 1e4

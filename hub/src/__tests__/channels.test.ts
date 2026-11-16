@@ -1,72 +1,59 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  ensureChannelMembership,
-  getChannelMembers,
-  getUserChannels,
-  initGeneralChannel,
-  isChannelMember,
-  joinChannel,
-  leaveChannel,
-  removeChannel,
-  removeUserFromAllChannels,
-  resetChannelState,
-} from "../channels.js";
-import { dbCreateChannel, initDB } from "../db.js";
+import { createProject, type Project } from "../project.js";
+
+let p: Project;
 
 beforeEach(() => {
-  process.env.WALKIE_TALKIE_DB_PATH = ":memory:";
-  initDB();
-  resetChannelState();
-  initGeneralChannel();
+  p = createProject("test", ":memory:");
 });
 
 describe("joinChannel", () => {
   it("should add a user to an existing channel", () => {
-    joinChannel("#all", "alice");
-    expect(getChannelMembers("#all")).toContain("alice");
+    p.channels.joinChannel("#all", "alice");
+    expect(p.channels.getChannelMembers("#all")).toContain("alice");
   });
 
   it("should throw when joining a non-existent channel", () => {
-    expect(() => joinChannel("#nope", "alice")).toThrow("does not exist");
+    expect(() => p.channels.joinChannel("#nope", "alice")).toThrow("does not exist");
   });
 });
 
 describe("leaveChannel", () => {
   it("should remove a user from a channel", () => {
-    joinChannel("#all", "alice");
-    leaveChannel("#all", "alice");
-    expect(getChannelMembers("#all")).not.toContain("alice");
+    p.channels.joinChannel("#all", "alice");
+    p.channels.leaveChannel("#all", "alice");
+    expect(p.channels.getChannelMembers("#all")).not.toContain("alice");
   });
 });
 
 describe("isChannelMember", () => {
   it("should return true for members", () => {
-    joinChannel("#all", "alice");
-    expect(isChannelMember("#all", "alice")).toBe(true);
+    p.channels.joinChannel("#all", "alice");
+    expect(p.channels.isChannelMember("#all", "alice")).toBe(true);
   });
 
   it("should return false for non-members", () => {
-    expect(isChannelMember("#all", "nobody")).toBe(false);
+    expect(p.channels.isChannelMember("#all", "nobody")).toBe(false);
   });
 });
 
 describe("removeUserFromAllChannels", () => {
   it("should remove user from every channel", () => {
-    dbCreateChannel("#room", "alice");
-    joinChannel("#all", "alice");
-    joinChannel("#room", "alice");
-    removeUserFromAllChannels("alice");
-    expect(isChannelMember("#all", "alice")).toBe(false);
-    expect(isChannelMember("#room", "alice")).toBe(false);
+    p.db.dbCreateChannel("#room", "alice");
+    p.channels.joinChannel("#all", "alice");
+    p.channels.joinChannel("#room", "alice");
+    p.channels.removeUserFromAllChannels("alice");
+    expect(p.channels.isChannelMember("#all", "alice")).toBe(false);
+    expect(p.channels.isChannelMember("#room", "alice")).toBe(false);
   });
 });
 
 describe("getUserChannels", () => {
   it("should return all channels a user belongs to", () => {
-    dbCreateChannel("#room", "alice");
-    joinChannel("#all", "alice");
-    joinChannel("#room", "alice");
-    const channels = getUserChannels("alice");
+    p.db.dbCreateChannel("#room", "alice");
+    p.channels.joinChannel("#all", "alice");
+    p.channels.joinChannel("#room", "alice");
+    const channels = p.channels.getUserChannels("alice");
     expect(channels).toContain("#all");
     expect(channels).toContain("#room");
   });
@@ -74,10 +61,10 @@ describe("getUserChannels", () => {
 
 describe("removeChannel", () => {
   it("should remove the channel from in-memory state", () => {
-    dbCreateChannel("#temp", "alice");
-    ensureChannelMembership("#temp");
-    joinChannel("#temp", "alice");
-    removeChannel("#temp");
-    expect(getChannelMembers("#temp")).toEqual([]);
+    p.db.dbCreateChannel("#temp", "alice");
+    p.channels.ensureChannelMembership("#temp");
+    p.channels.joinChannel("#temp", "alice");
+    p.channels.removeChannel("#temp");
+    expect(p.channels.getChannelMembers("#temp")).toEqual([]);
   });
 });

@@ -27,55 +27,70 @@ export type HubEvent =
 
 const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
 
-const clients = new Set<ServerResponse>();
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+/** One live event stream (Server-Sent Events) with its own set of dashboard clients. */
+export function createEventStream<E = HubEvent>() {
+  const clients = new Set<ServerResponse>();
+  const listeners = new Set<(event: E) => void>();
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-function startHeartbeat(): void {
-  if (heartbeatTimer) return;
-  heartbeatTimer = setInterval(() => {
-    for (const client of clients) {
-      client.write(":\n\n");
+  function startHeartbeat(): void {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      for (const client of clients) {
+        client.write(":\n\n");
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer && clients.size === 0) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
     }
-  }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function addSSEClient(res: ServerResponse, onClose?: () => void): void {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.write("\n");
+    clients.add(res);
+    startHeartbeat();
+    res.on("close", () => {
+      clients.delete(res);
+      stopHeartbeat();
+      onClose?.();
+    });
+  }
+
+  function closeAllSSEClients(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    for (const client of clients) {
+      client.end();
+    }
+    clients.clear();
+  }
+
+  function broadcast(event: E): void {
+    const data = JSON.stringify(event);
+    for (const client of clients) {
+      client.write(`data: ${data}\n\n`);
+    }
+    for (const listener of listeners) listener(event);
+  }
+
+  /** Calls `listener` with every event broadcast on this stream; returns an unsubscribe function. */
+  function subscribe(listener: (event: E) => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  return { addSSEClient, closeAllSSEClients, broadcast, subscribe };
 }
 
-function stopHeartbeat(): void {
-  if (heartbeatTimer && clients.size === 0) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
-export function addSSEClient(res: ServerResponse, onClose?: () => void): void {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-  res.write("\n");
-  clients.add(res);
-  startHeartbeat();
-  res.on("close", () => {
-    clients.delete(res);
-    stopHeartbeat();
-    onClose?.();
-  });
-}
-
-export function closeAllSSEClients(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-  for (const client of clients) {
-    client.end();
-  }
-  clients.clear();
-}
-
-export function broadcast(event: HubEvent): void {
-  const data = JSON.stringify(event);
-  for (const client of clients) {
-    client.write(`data: ${data}\n\n`);
-  }
-}
+export type EventStream<E = HubEvent> = ReturnType<typeof createEventStream<E>>;

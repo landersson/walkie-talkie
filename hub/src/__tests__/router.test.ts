@@ -1,122 +1,117 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { registerUser, resetAuthState } from "../auth.js";
-import { initGeneralChannel, joinChannel, resetChannelState } from "../channels.js";
-import { dbCreateChannel, initDB } from "../db.js";
-import { drainQueue, ensureQueue, removeQueue, routeMessage } from "../router.js";
+import { createProject, type Project } from "../project.js";
+
+let p: Project;
 
 beforeEach(() => {
-  process.env.WALKIE_TALKIE_DB_PATH = ":memory:";
-  initDB();
-  resetAuthState();
-  resetChannelState();
-  initGeneralChannel();
+  p = createProject("test", ":memory:");
 });
 
 describe("queue management", () => {
   it("should create and drain a queue", () => {
-    ensureQueue("alice");
-    const msgs = drainQueue("alice");
+    p.router.ensureQueue("alice");
+    const msgs = p.router.drainQueue("alice");
     expect(msgs).toEqual([]);
   });
 
   it("should return empty array for non-existent queue", () => {
-    expect(drainQueue("nobody")).toEqual([]);
+    expect(p.router.drainQueue("nobody")).toEqual([]);
   });
 
   it("should remove a queue", () => {
-    ensureQueue("alice");
-    removeQueue("alice");
-    expect(drainQueue("alice")).toEqual([]);
+    p.router.ensureQueue("alice");
+    p.router.removeQueue("alice");
+    expect(p.router.drainQueue("alice")).toEqual([]);
   });
 });
 
 describe("routeMessage", () => {
   it("should broadcast @all to all channel members except sender", () => {
-    const alice = registerUser("alice");
-    const bob = registerUser("bob");
-    ensureQueue(alice.name);
-    ensureQueue(bob.name);
-    joinChannel("#all", "alice");
-    joinChannel("#all", "bob");
+    const alice = p.auth.registerUser("alice");
+    const bob = p.auth.registerUser("bob");
+    p.router.ensureQueue(alice.name);
+    p.router.ensureQueue(bob.name);
+    p.channels.joinChannel("#all", "alice");
+    p.channels.joinChannel("#all", "bob");
 
-    const msg = routeMessage("alice", "@all", "hello");
+    const msg = p.router.routeMessage("alice", "@all", "hello");
     expect(msg.from).toBe("alice");
     expect(msg.to).toBe("@all");
     expect(msg.channel).toBe("#all");
 
     // Bob should have the message queued
-    const bobMsgs = drainQueue("bob");
+    const bobMsgs = p.router.drainQueue("bob");
     expect(bobMsgs).toHaveLength(1);
     expect(bobMsgs[0].content).toBe("hello");
 
     // Alice (sender) should NOT have it
-    const aliceMsgs = drainQueue("alice");
+    const aliceMsgs = p.router.drainQueue("alice");
     expect(aliceMsgs).toHaveLength(0);
   });
 
   it("should deliver DM to target user", () => {
-    registerUser("alice");
-    registerUser("bob");
-    ensureQueue("alice");
-    ensureQueue("bob");
-    joinChannel("#all", "alice");
-    joinChannel("#all", "bob");
+    p.auth.registerUser("alice");
+    p.auth.registerUser("bob");
+    p.router.ensureQueue("alice");
+    p.router.ensureQueue("bob");
+    p.channels.joinChannel("#all", "alice");
+    p.channels.joinChannel("#all", "bob");
 
-    const msg = routeMessage("alice", "@bob", "hi bob");
+    const msg = p.router.routeMessage("alice", "@bob", "hi bob");
     expect(msg.to).toBe("bob");
 
-    const bobMsgs = drainQueue("bob");
+    const bobMsgs = p.router.drainQueue("bob");
     expect(bobMsgs).toHaveLength(1);
   });
 
   it("should throw when target user is not registered", () => {
-    registerUser("alice");
-    ensureQueue("alice");
-    joinChannel("#all", "alice");
+    p.auth.registerUser("alice");
+    p.router.ensureQueue("alice");
+    p.channels.joinChannel("#all", "alice");
 
-    expect(() => routeMessage("alice", "@nobody", "hi")).toThrow("not connected");
+    expect(() => p.router.routeMessage("alice", "@nobody", "hi")).toThrow("not connected");
   });
 
   it("should throw when target is not in the channel", () => {
-    registerUser("alice");
-    registerUser("bob");
-    ensureQueue("alice");
-    joinChannel("#all", "alice");
+    p.auth.registerUser("alice");
+    p.auth.registerUser("bob");
+    p.router.ensureQueue("alice");
+    p.channels.joinChannel("#all", "alice");
     // bob not joined to #all
 
-    expect(() => routeMessage("alice", "@bob", "hi")).toThrow("not a member");
+    expect(() => p.router.routeMessage("alice", "@bob", "hi")).toThrow("not a member");
   });
 
   it("should route messages in custom channels", () => {
-    registerUser("alice");
-    registerUser("bob");
-    ensureQueue("alice");
-    ensureQueue("bob");
-    dbCreateChannel("#room", "alice");
-    joinChannel("#room", "alice");
-    joinChannel("#room", "bob");
+    p.auth.registerUser("alice");
+    p.auth.registerUser("bob");
+    p.router.ensureQueue("alice");
+    p.router.ensureQueue("bob");
+    p.db.dbCreateChannel("#room", "alice");
+    p.channels.joinChannel("#room", "alice");
+    p.channels.joinChannel("#room", "bob");
 
-    const msg = routeMessage("alice", "@all", "room msg", "#room");
+    const msg = p.router.routeMessage("alice", "@all", "room msg", "#room");
     expect(msg.channel).toBe("#room");
 
-    const bobMsgs = drainQueue("bob");
+    const bobMsgs = p.router.drainQueue("bob");
     expect(bobMsgs).toHaveLength(1);
     expect(bobMsgs[0].channel).toBe("#room");
   });
 
   it("should include image in routed message", () => {
-    registerUser("alice");
-    registerUser("bob");
-    ensureQueue("alice");
-    ensureQueue("bob");
-    joinChannel("#all", "alice");
-    joinChannel("#all", "bob");
+    p.auth.registerUser("alice");
+    p.auth.registerUser("bob");
+    p.router.ensureQueue("alice");
+    p.router.ensureQueue("bob");
+    p.channels.joinChannel("#all", "alice");
+    p.channels.joinChannel("#all", "bob");
 
     const image = { data: "iVBORw0KGgo=", mimeType: "image/png" };
-    const msg = routeMessage("alice", "@all", "check this", "#all", image);
+    const msg = p.router.routeMessage("alice", "@all", "check this", "#all", image);
     expect(msg.image).toEqual(image);
 
-    const bobMsgs = drainQueue("bob");
+    const bobMsgs = p.router.drainQueue("bob");
     expect(bobMsgs).toHaveLength(1);
     expect(bobMsgs[0].image).toEqual(image);
   });
@@ -124,21 +119,21 @@ describe("routeMessage", () => {
 
 describe("routeMessage with humans", () => {
   it("should not queue messages for humans who are channel members", () => {
-    registerUser("agent1");
-    registerUser("op", "human");
-    joinChannel("#all", "agent1");
-    joinChannel("#all", "op");
-    routeMessage("agent1", "@all", "hello", "#all");
-    routeMessage("agent1", "@op", "direct", "#all");
-    expect(drainQueue("op")).toEqual([]);
+    p.auth.registerUser("agent1");
+    p.auth.registerUser("op", "human");
+    p.channels.joinChannel("#all", "agent1");
+    p.channels.joinChannel("#all", "op");
+    p.router.routeMessage("agent1", "@all", "hello", "#all");
+    p.router.routeMessage("agent1", "@op", "direct", "#all");
+    expect(p.router.drainQueue("op")).toEqual([]);
   });
 
   it("should tag messages with the sender's role", () => {
-    registerUser("agent1");
-    registerUser("op", "human");
-    joinChannel("#all", "agent1");
-    expect(routeMessage("op", "@all", "do it", "#all").fromRole).toBe("human");
-    expect(drainQueue("agent1")[0].fromRole).toBe("human");
-    expect(routeMessage("agent1", "@op", "done", "#all").fromRole).toBe("agent");
+    p.auth.registerUser("agent1");
+    p.auth.registerUser("op", "human");
+    p.channels.joinChannel("#all", "agent1");
+    expect(p.router.routeMessage("op", "@all", "do it", "#all").fromRole).toBe("human");
+    expect(p.router.drainQueue("agent1")[0].fromRole).toBe("human");
+    expect(p.router.routeMessage("agent1", "@op", "done", "#all").fromRole).toBe("agent");
   });
 });

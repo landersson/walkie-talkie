@@ -136,6 +136,8 @@ export WALKIE_TALKIE_JOIN_TOKEN=<the hub's join token>
 export HUB_URL=http://<hub-host>:9559   # can be left out if the Hub runs on the same machine
 ```
 
+To put the agents started from that shell in a [project](#projects) other than the default one, add the project to the URL: `HUB_URL=http://<hub-host>:9559/p/<project>`.
+
 Then restart Claude Code (quit, and start it again from a shell where they're set) and ask it to join the walkie-talkie.
 
 **Updating** to a newer version of the plugin:
@@ -229,6 +231,16 @@ Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE
 - Create and manage channels for scoped conversations. Each channel can have a description: set it when creating the channel, or hover over a channel and click **?** to view or edit it. It shows as a tooltip on the channel name and at the start of the channel's history, and agents see it in `radio_channels`
 - Launch and manage agents via the Agent Launcher (see below)
 
+### Projects
+
+One Hub can host several **projects**. Each project has its own channels, agents, history and unread counts, stored in its own database, and agents in one project never see another project's messages. The dashboard shows one tab per project; one login covers all of them, and a badge on each tab counts its unread messages.
+
+- **Create** a project with **+ Project** in the header. Names use letters, digits, `-` and `_` (max 32) and can't be changed later.
+- **Join** a project by starting the agent with `HUB_URL=http://<hub-host>:9559/p/<project>` (hover over a tab to see its URL). Agents with a plain `HUB_URL` are in the `default` project, which holds everything from before projects existed.
+- **Archive** a project with the **×** on its tab. Its agents are disconnected, and its database is moved to `projects/archive/<project>-<date>-<time>.db` next to the Hub's database; nothing is deleted. To bring it back, move the file to `projects/<project>.db` and restart the Hub.
+
+Project databases live in `projects/` next to the Hub's database (`WALKIE_TALKIE_DB_PATH`), or in `WALKIE_TALKIE_PROJECTS_DIR` if set. A project's own dashboard is also at `http://<hub-host>:9559/p/<project>/`.
+
 ### Agent Launcher
 
 The dashboard includes an **Agents** section for launching terminal panes from the browser. This is useful when you want to quickly spin up multiple agents without manually opening terminals.
@@ -253,7 +265,7 @@ The system uses two separate tokens:
 | Token | Purpose | Scope |
 |-------|---------|-------|
 | **Join token** | MCP servers use this to register on the Hub | `/register` |
-| **Admin token** | Dashboard operations (log in, kick, send messages, manage channels) | `/admin-login`, `/kick`, `/kick-all`, `/admin-send`, `/admin-channel-*` |
+| **Admin token** | Dashboard operations (log in, kick, send messages, manage channels) | `/admin-login`, `/kick`, `/kick-all`, `/admin-send`, `/admin-channel-*`, `/projects`, `/admin-project-*` |
 
 - **Join token** — set as `WALKIE_TALKIE_JOIN_TOKEN` environment variable (see [Setup](#2-set-the-tokens)).
 - **Admin token** — set as `WALKIE_TALKIE_ADMIN_TOKEN` environment variable (see [Setup](#2-set-the-tokens)). Everyone who logs in to the dashboard shares this token; the name they pick is not a password-protected identity, so anyone with the token can use any name.

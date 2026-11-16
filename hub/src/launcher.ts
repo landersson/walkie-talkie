@@ -3,7 +3,6 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentConfigRow } from "./db.js";
-import { dbListAgentConfigs } from "./db.js";
 
 let windowOpened = false;
 
@@ -64,8 +63,8 @@ export function launchAgent(config: AgentConfigRow): Promise<void> {
   return openInITerm(config);
 }
 
-export function autoLaunchAgents(): void {
-  const configs = dbListAgentConfigs().filter((c) => c.auto_start);
+export function autoLaunchAgents(allConfigs: AgentConfigRow[]): void {
+  const configs = allConfigs.filter((c) => c.auto_start);
   if (configs.length === 0) return;
 
   let chain = Promise.resolve();

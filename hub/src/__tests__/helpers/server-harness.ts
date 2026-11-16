@@ -1,8 +1,5 @@
 import type { Server } from "node:http";
-import { resetAuthState } from "../../auth.js";
-import { initGeneralChannel, resetChannelState } from "../../channels.js";
-import { initDB } from "../../db.js";
-import { createHubServer } from "../../server.js";
+import { createHubServer, type HubOptions } from "../../server.js";
 
 export interface TestContext {
   baseUrl: string;
@@ -14,17 +11,13 @@ export interface TestContext {
 const ADMIN_TOKEN = "test-admin-token";
 const JOIN_TOKEN = "test-join-token";
 
-export async function startTestServer(): Promise<TestContext> {
-  // Reset in-memory state
-  resetAuthState();
-  resetChannelState();
-
-  // Init in-memory DB
-  process.env.WALKIE_TALKIE_DB_PATH = ":memory:";
-  initDB();
-  initGeneralChannel();
-
-  const server = createHubServer(0, ADMIN_TOKEN, JOIN_TOKEN);
+export async function startTestServer(options: HubOptions = {}): Promise<TestContext> {
+  // Fresh in-memory projects unless the test asks for files
+  const server = createHubServer(0, ADMIN_TOKEN, JOIN_TOKEN, "127.0.0.1", {
+    dbPath: ":memory:",
+    projectsDir: null,
+    ...options,
+  });
 
   // Wait for server to start listening
   await new Promise<void>((resolve) => {

@@ -1,4 +1,3 @@
-import path from "node:path";
 import Database from "better-sqlite3";
 
 import type { Message, MessageImage } from "./types.js";
@@ -13,6 +12,13 @@ export interface AgentConfigRow {
   created_at: number;
 }
 
+export interface SessionRow {
+  name: string;
+  token: string;
+  role: string;
+  registered_at: number;
+}
+
 export interface ChannelRow {
   name: string;
   created_by: string;
@@ -20,11 +26,9 @@ export interface ChannelRow {
   description: string;
 }
 
-let db: Database.Database;
-
-export function initDB(): void {
-  const dbPath = process.env.WALKIE_TALKIE_DB_PATH ?? path.join(process.cwd(), "walkie-talkie.db");
-  db = new Database(dbPath);
+/** Opens (creating if needed) one project's SQLite database and returns its queries. */
+export function openProjectDB(dbPath: string) {
+  const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
 
   db.exec(`
@@ -125,291 +129,324 @@ export function initDB(): void {
       Date.now(),
     );
   }
-}
 
-export function dbCreateChannel(name: string, createdBy: string, description = ""): ChannelRow {
-  const now = Date.now();
-  db.prepare("INSERT INTO channels (name, created_by, created_at, description) VALUES (?, ?, ?, ?)").run(
-    name,
-    createdBy,
-    now,
-    description,
-  );
-  return { name, created_by: createdBy, created_at: now, description };
-}
-
-export function dbSetChannelDescription(name: string, description: string): boolean {
-  return db.prepare("UPDATE channels SET description = ? WHERE name = ?").run(description, name).changes > 0;
-}
-
-export function dbDeleteChannel(name: string): boolean {
-  const result = db.prepare("DELETE FROM channels WHERE name = ?").run(name);
-  return result.changes > 0;
-}
-
-export function dbListChannels(): ChannelRow[] {
-  return db
-    .prepare("SELECT name, created_by, created_at, description FROM channels ORDER BY created_at")
-    .all() as ChannelRow[];
-}
-
-export function dbGetChannel(name: string): ChannelRow | undefined {
-  return db.prepare("SELECT name, created_by, created_at, description FROM channels WHERE name = ?").get(name) as
-    | ChannelRow
-    | undefined;
-}
-
-export function dbAddChannelMember(channel: string, userName: string): void {
-  db.prepare("INSERT OR IGNORE INTO channel_members (channel, user_name) VALUES (?, ?)").run(channel, userName);
-}
-
-export function dbRemoveChannelMember(channel: string, userName: string): void {
-  db.prepare("DELETE FROM channel_members WHERE channel = ? AND user_name = ?").run(channel, userName);
-}
-
-export function dbRemoveAllMembersOfChannel(channel: string): void {
-  db.prepare("DELETE FROM channel_members WHERE channel = ?").run(channel);
-}
-
-export function dbGetUserChannels(userName: string): string[] {
-  const rows = db.prepare("SELECT channel FROM channel_members WHERE user_name = ?").all(userName) as {
-    channel: string;
-  }[];
-  return rows.map((r) => r.channel);
-}
-
-const ALL_CHANNEL_MAX = 200;
-
-export function dbSaveMessage(msg: Message): void {
-  db.prepare(
-    `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    msg.id,
-    msg.from,
-    msg.to,
-    msg.content,
-    msg.channel,
-    msg.timestamp,
-    msg.image ? JSON.stringify(msg.image) : null,
-  );
-
-  if (msg.channel === "#all") {
-    dbPruneAllChannel();
+  function dbCreateChannel(name: string, createdBy: string, description = ""): ChannelRow {
+    const now = Date.now();
+    db.prepare("INSERT INTO channels (name, created_by, created_at, description) VALUES (?, ?, ?, ?)").run(
+      name,
+      createdBy,
+      now,
+      description,
+    );
+    return { name, created_by: createdBy, created_at: now, description };
   }
-}
 
-function parseMessageRow(row: Record<string, unknown>): Message {
-  const imageStr = row.image as string | null;
-  return {
-    id: row.id as string,
-    from: row.from as string,
-    to: row.to as string,
-    content: row.content as string,
-    channel: row.channel as string,
-    timestamp: row.timestamp as number,
-    image: imageStr ? (JSON.parse(imageStr) as MessageImage) : undefined,
-    seq: row.seq as number | undefined,
-  };
-}
+  function dbSetChannelDescription(name: string, description: string): boolean {
+    return db.prepare("UPDATE channels SET description = ? WHERE name = ?").run(description, name).changes > 0;
+  }
 
-/**
- * Newest `limit` messages of a channel, oldest first. With `before`, only messages older than
- * that point; `before.seq` (a message's rowid) breaks ties between equal timestamps.
- */
-export function dbGetChannelMessages(
-  channel: string,
-  limit = 50,
-  before?: { timestamp: number; seq?: number },
-): Message[] {
-  const ts = before?.timestamp ?? Number.MAX_SAFE_INTEGER;
-  const rows = db
-    .prepare(
-      `SELECT * FROM (
+  function dbDeleteChannel(name: string): boolean {
+    const result = db.prepare("DELETE FROM channels WHERE name = ?").run(name);
+    return result.changes > 0;
+  }
+
+  function dbListChannels(): ChannelRow[] {
+    return db
+      .prepare("SELECT name, created_by, created_at, description FROM channels ORDER BY created_at")
+      .all() as ChannelRow[];
+  }
+
+  function dbGetChannel(name: string): ChannelRow | undefined {
+    return db.prepare("SELECT name, created_by, created_at, description FROM channels WHERE name = ?").get(name) as
+      | ChannelRow
+      | undefined;
+  }
+
+  function dbAddChannelMember(channel: string, userName: string): void {
+    db.prepare("INSERT OR IGNORE INTO channel_members (channel, user_name) VALUES (?, ?)").run(channel, userName);
+  }
+
+  function dbRemoveChannelMember(channel: string, userName: string): void {
+    db.prepare("DELETE FROM channel_members WHERE channel = ? AND user_name = ?").run(channel, userName);
+  }
+
+  function dbRemoveAllMembersOfChannel(channel: string): void {
+    db.prepare("DELETE FROM channel_members WHERE channel = ?").run(channel);
+  }
+
+  function dbGetUserChannels(userName: string): string[] {
+    const rows = db.prepare("SELECT channel FROM channel_members WHERE user_name = ?").all(userName) as {
+      channel: string;
+    }[];
+    return rows.map((r) => r.channel);
+  }
+
+  const ALL_CHANNEL_MAX = 200;
+
+  function dbSaveMessage(msg: Message): void {
+    db.prepare(
+      `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      msg.id,
+      msg.from,
+      msg.to,
+      msg.content,
+      msg.channel,
+      msg.timestamp,
+      msg.image ? JSON.stringify(msg.image) : null,
+    );
+
+    if (msg.channel === "#all") {
+      dbPruneAllChannel();
+    }
+  }
+
+  function parseMessageRow(row: Record<string, unknown>): Message {
+    const imageStr = row.image as string | null;
+    return {
+      id: row.id as string,
+      from: row.from as string,
+      to: row.to as string,
+      content: row.content as string,
+      channel: row.channel as string,
+      timestamp: row.timestamp as number,
+      image: imageStr ? (JSON.parse(imageStr) as MessageImage) : undefined,
+      seq: row.seq as number | undefined,
+    };
+  }
+
+  /**
+   * Newest `limit` messages of a channel, oldest first. With `before`, only messages older than
+   * that point; `before.seq` (a message's rowid) breaks ties between equal timestamps.
+   */
+  function dbGetChannelMessages(channel: string, limit = 50, before?: { timestamp: number; seq?: number }): Message[] {
+    const ts = before?.timestamp ?? Number.MAX_SAFE_INTEGER;
+    const rows = db
+      .prepare(
+        `SELECT * FROM (
         SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
         WHERE channel = ? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
         ORDER BY timestamp DESC, rowid DESC LIMIT ?
       ) ORDER BY timestamp ASC, seq ASC`,
-    )
-    .all(channel, ts, ts, before?.seq ?? 0, limit) as Record<string, unknown>[];
-  return rows.map(parseMessageRow);
-}
+      )
+      .all(channel, ts, ts, before?.seq ?? 0, limit) as Record<string, unknown>[];
+    return rows.map(parseMessageRow);
+  }
 
-export function dbGetRecentMessages(limit = 200): Message[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM (
+  function dbGetRecentMessages(limit = 200): Message[] {
+    const rows = db
+      .prepare(
+        `SELECT * FROM (
         SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
         ORDER BY timestamp DESC, rowid DESC LIMIT ?
       ) ORDER BY timestamp ASC, seq ASC`,
-    )
-    .all(limit) as Record<string, unknown>[];
-  return rows.map(parseMessageRow);
-}
+      )
+      .all(limit) as Record<string, unknown>[];
+    return rows.map(parseMessageRow);
+  }
 
-export function dbDeleteChannelMessages(channel: string): void {
-  db.prepare("DELETE FROM messages WHERE channel = ?").run(channel);
-}
+  function dbDeleteChannelMessages(channel: string): void {
+    db.prepare("DELETE FROM messages WHERE channel = ?").run(channel);
+  }
 
-export function dbUpdateReadCursor(userName: string, channel: string, timestamp?: number): void {
-  const ts = timestamp ?? Date.now();
-  db.prepare(
-    `INSERT INTO read_cursors (user_name, channel, last_read_at) VALUES (?, ?, ?)
+  function dbUpdateReadCursor(userName: string, channel: string, timestamp?: number): void {
+    const ts = timestamp ?? Date.now();
+    db.prepare(
+      `INSERT INTO read_cursors (user_name, channel, last_read_at) VALUES (?, ?, ?)
      ON CONFLICT(user_name, channel) DO UPDATE SET last_read_at = MAX(last_read_at, excluded.last_read_at)`,
-  ).run(userName, channel, ts);
-}
+    ).run(userName, channel, ts);
+  }
 
-export function dbGetUnreadCounts(userName: string): Record<string, number> {
-  const rows = db
-    .prepare(
-      `SELECT m.channel, COUNT(*) as cnt
+  function dbGetUnreadCounts(userName: string): Record<string, number> {
+    const rows = db
+      .prepare(
+        `SELECT m.channel, COUNT(*) as cnt
      FROM messages m
      LEFT JOIN read_cursors rc ON rc.user_name = ? AND rc.channel = m.channel
      WHERE m.timestamp > COALESCE(rc.last_read_at, 0)
      GROUP BY m.channel`,
-    )
-    .all(userName) as { channel: string; cnt: number }[];
-  const result: Record<string, number> = {};
-  for (const row of rows) {
-    result[row.channel] = row.cnt;
+      )
+      .all(userName) as { channel: string; cnt: number }[];
+    const result: Record<string, number> = {};
+    for (const row of rows) {
+      result[row.channel] = row.cnt;
+    }
+    return result;
   }
-  return result;
-}
 
-export function dbDeleteReadCursorsForChannel(channel: string): void {
-  db.prepare("DELETE FROM read_cursors WHERE channel = ?").run(channel);
-}
-
-// Agent config CRUD
-export function dbCreateAgentConfig(
-  id: string,
-  name: string,
-  workDir: string,
-  command: string,
-  autoStart: boolean,
-  envVars?: Record<string, string>,
-): AgentConfigRow {
-  const now = Date.now();
-  const envJson = envVars ? JSON.stringify(envVars) : null;
-  db.prepare(
-    "INSERT INTO agent_configs (id, name, work_dir, command, auto_start, env_vars, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(id, name, workDir, command, autoStart ? 1 : 0, envJson, now);
-  return { id, name, work_dir: workDir, command, auto_start: autoStart ? 1 : 0, env_vars: envJson, created_at: now };
-}
-
-export function dbListAgentConfigs(): AgentConfigRow[] {
-  return db.prepare("SELECT * FROM agent_configs ORDER BY created_at").all() as AgentConfigRow[];
-}
-
-export function dbGetAgentConfig(id: string): AgentConfigRow | undefined {
-  return db.prepare("SELECT * FROM agent_configs WHERE id = ?").get(id) as AgentConfigRow | undefined;
-}
-
-export function dbUpdateAgentConfig(
-  id: string,
-  updates: {
-    name?: string;
-    workDir?: string;
-    command?: string;
-    autoStart?: boolean;
-    envVars?: Record<string, string> | null;
-  },
-): boolean {
-  const fields: string[] = [];
-  const values: unknown[] = [];
-  if (updates.name !== undefined) {
-    fields.push("name = ?");
-    values.push(updates.name);
+  function dbDeleteReadCursorsForChannel(channel: string): void {
+    db.prepare("DELETE FROM read_cursors WHERE channel = ?").run(channel);
   }
-  if (updates.workDir !== undefined) {
-    fields.push("work_dir = ?");
-    values.push(updates.workDir);
-  }
-  if (updates.command !== undefined) {
-    fields.push("command = ?");
-    values.push(updates.command);
-  }
-  if (updates.autoStart !== undefined) {
-    fields.push("auto_start = ?");
-    values.push(updates.autoStart ? 1 : 0);
-  }
-  if (updates.envVars !== undefined) {
-    fields.push("env_vars = ?");
-    values.push(updates.envVars ? JSON.stringify(updates.envVars) : null);
-  }
-  if (fields.length === 0) return false;
-  values.push(id);
-  const result = db.prepare(`UPDATE agent_configs SET ${fields.join(", ")} WHERE id = ?`).run(...values);
-  return result.changes > 0;
-}
 
-export function dbDeleteAgentConfig(id: string): boolean {
-  const result = db.prepare("DELETE FROM agent_configs WHERE id = ?").run(id);
-  return result.changes > 0;
-}
-
-function dbPruneAllChannel(): void {
-  const count = (db.prepare("SELECT COUNT(*) as cnt FROM messages WHERE channel = '#all'").get() as { cnt: number })
-    .cnt;
-  if (count > ALL_CHANNEL_MAX) {
+  // Agent config CRUD
+  function dbCreateAgentConfig(
+    id: string,
+    name: string,
+    workDir: string,
+    command: string,
+    autoStart: boolean,
+    envVars?: Record<string, string>,
+  ): AgentConfigRow {
+    const now = Date.now();
+    const envJson = envVars ? JSON.stringify(envVars) : null;
     db.prepare(
-      `DELETE FROM messages WHERE channel = '#all' AND id NOT IN (
+      "INSERT INTO agent_configs (id, name, work_dir, command, auto_start, env_vars, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(id, name, workDir, command, autoStart ? 1 : 0, envJson, now);
+    return { id, name, work_dir: workDir, command, auto_start: autoStart ? 1 : 0, env_vars: envJson, created_at: now };
+  }
+
+  function dbListAgentConfigs(): AgentConfigRow[] {
+    return db.prepare("SELECT * FROM agent_configs ORDER BY created_at").all() as AgentConfigRow[];
+  }
+
+  function dbGetAgentConfig(id: string): AgentConfigRow | undefined {
+    return db.prepare("SELECT * FROM agent_configs WHERE id = ?").get(id) as AgentConfigRow | undefined;
+  }
+
+  function dbUpdateAgentConfig(
+    id: string,
+    updates: {
+      name?: string;
+      workDir?: string;
+      command?: string;
+      autoStart?: boolean;
+      envVars?: Record<string, string> | null;
+    },
+  ): boolean {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    if (updates.name !== undefined) {
+      fields.push("name = ?");
+      values.push(updates.name);
+    }
+    if (updates.workDir !== undefined) {
+      fields.push("work_dir = ?");
+      values.push(updates.workDir);
+    }
+    if (updates.command !== undefined) {
+      fields.push("command = ?");
+      values.push(updates.command);
+    }
+    if (updates.autoStart !== undefined) {
+      fields.push("auto_start = ?");
+      values.push(updates.autoStart ? 1 : 0);
+    }
+    if (updates.envVars !== undefined) {
+      fields.push("env_vars = ?");
+      values.push(updates.envVars ? JSON.stringify(updates.envVars) : null);
+    }
+    if (fields.length === 0) return false;
+    values.push(id);
+    const result = db.prepare(`UPDATE agent_configs SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+    return result.changes > 0;
+  }
+
+  function dbDeleteAgentConfig(id: string): boolean {
+    const result = db.prepare("DELETE FROM agent_configs WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  function dbPruneAllChannel(): void {
+    const count = (db.prepare("SELECT COUNT(*) as cnt FROM messages WHERE channel = '#all'").get() as { cnt: number })
+      .cnt;
+    if (count > ALL_CHANNEL_MAX) {
+      db.prepare(
+        `DELETE FROM messages WHERE channel = '#all' AND id NOT IN (
         SELECT id FROM messages WHERE channel = '#all' ORDER BY timestamp DESC LIMIT ?
       )`,
-    ).run(ALL_CHANNEL_MAX);
+      ).run(ALL_CHANNEL_MAX);
+    }
   }
-}
 
-// --- Sessions (survive hub restarts) ---
+  // --- Sessions (survive hub restarts) ---
 
-export interface SessionRow {
-  name: string;
-  token: string;
-  role: string;
-  registered_at: number;
-}
-
-export function dbSaveSession(name: string, token: string, role: string, registeredAt: number): void {
-  db.prepare("INSERT OR REPLACE INTO sessions (name, token, role, registered_at) VALUES (?, ?, ?, ?)").run(
-    name,
-    token,
-    role,
-    registeredAt,
-  );
-}
-
-export function dbDeleteSession(name: string): void {
-  db.prepare("DELETE FROM sessions WHERE name = ?").run(name);
-}
-
-export function dbDeleteAllSessions(): void {
-  db.prepare("DELETE FROM sessions").run();
-}
-
-export function dbListSessions(): SessionRow[] {
-  return db
-    .prepare("SELECT name, token, role, registered_at FROM sessions ORDER BY registered_at")
-    .all() as SessionRow[];
-}
-
-export function dbSavePendingMessages(userName: string, messages: Message[]): void {
-  const insert = db.prepare("INSERT INTO pending_messages (user_name, message) VALUES (?, ?)");
-  db.transaction(() => {
-    for (const m of messages) insert.run(userName, JSON.stringify(m));
-  })();
-}
-
-/** Returns and deletes all saved undelivered messages, grouped by user in delivery order. */
-export function dbTakePendingMessages(): Map<string, Message[]> {
-  const rows = db.prepare("SELECT user_name, message FROM pending_messages ORDER BY seq").all() as {
-    user_name: string;
-    message: string;
-  }[];
-  db.prepare("DELETE FROM pending_messages").run();
-  const result = new Map<string, Message[]>();
-  for (const row of rows) {
-    const list = result.get(row.user_name) ?? [];
-    list.push(JSON.parse(row.message) as Message);
-    result.set(row.user_name, list);
+  function dbSaveSession(name: string, token: string, role: string, registeredAt: number): void {
+    db.prepare("INSERT OR REPLACE INTO sessions (name, token, role, registered_at) VALUES (?, ?, ?, ?)").run(
+      name,
+      token,
+      role,
+      registeredAt,
+    );
   }
-  return result;
+
+  function dbDeleteSession(name: string): void {
+    db.prepare("DELETE FROM sessions WHERE name = ?").run(name);
+  }
+
+  function dbDeleteAllSessions(): void {
+    db.prepare("DELETE FROM sessions").run();
+  }
+
+  function dbListSessions(): SessionRow[] {
+    return db
+      .prepare("SELECT name, token, role, registered_at FROM sessions ORDER BY registered_at")
+      .all() as SessionRow[];
+  }
+
+  function dbSavePendingMessages(userName: string, messages: Message[]): void {
+    const insert = db.prepare("INSERT INTO pending_messages (user_name, message) VALUES (?, ?)");
+    db.transaction(() => {
+      for (const m of messages) insert.run(userName, JSON.stringify(m));
+    })();
+  }
+
+  /** Returns and deletes all saved undelivered messages, grouped by user in delivery order. */
+  function dbTakePendingMessages(): Map<string, Message[]> {
+    const rows = db.prepare("SELECT user_name, message FROM pending_messages ORDER BY seq").all() as {
+      user_name: string;
+      message: string;
+    }[];
+    db.prepare("DELETE FROM pending_messages").run();
+    const result = new Map<string, Message[]>();
+    for (const row of rows) {
+      const list = result.get(row.user_name) ?? [];
+      list.push(JSON.parse(row.message) as Message);
+      result.set(row.user_name, list);
+    }
+    return result;
+  }
+
+  /** Writes the WAL back into the main file and closes the database. */
+  function close(): void {
+    try {
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* in-memory or already closed */
+    }
+    db.close();
+  }
+
+  return {
+    path: dbPath,
+    close,
+    dbCreateChannel,
+    dbSetChannelDescription,
+    dbDeleteChannel,
+    dbListChannels,
+    dbGetChannel,
+    dbAddChannelMember,
+    dbRemoveChannelMember,
+    dbRemoveAllMembersOfChannel,
+    dbGetUserChannels,
+    dbSaveMessage,
+    dbGetChannelMessages,
+    dbGetRecentMessages,
+    dbDeleteChannelMessages,
+    dbUpdateReadCursor,
+    dbGetUnreadCounts,
+    dbDeleteReadCursorsForChannel,
+    dbCreateAgentConfig,
+    dbListAgentConfigs,
+    dbGetAgentConfig,
+    dbUpdateAgentConfig,
+    dbDeleteAgentConfig,
+    dbSaveSession,
+    dbDeleteSession,
+    dbDeleteAllSessions,
+    dbListSessions,
+    dbSavePendingMessages,
+    dbTakePendingMessages,
+  };
 }
+
+export type ProjectDB = ReturnType<typeof openProjectDB>;

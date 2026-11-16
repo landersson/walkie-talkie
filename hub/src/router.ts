@@ -1,54 +1,89 @@
 import { randomUUID } from "node:crypto";
-import { getUserRole, getUsersByRole, isUserRegistered } from "./auth.js";
-import { getChannelMembers, isChannelMember } from "./channels.js";
-import { dbSaveMessage } from "./db.js";
-import { deliverMessage } from "./polling.js";
+import type { Auth } from "./auth.js";
+import type { Channels } from "./channels.js";
+import type { ProjectDB } from "./db.js";
+import type { Polling } from "./polling.js";
 import type { Message, MessageImage } from "./types.js";
 
-const messageQueues = new Map<string, Message[]>();
+export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, polling: Polling) {
+  const { getUserRole, getUsersByRole, isUserRegistered } = auth;
+  const { getChannelMembers, isChannelMember } = channels;
+  const { dbSaveMessage } = db;
+  const { deliverMessage } = polling;
+  const messageQueues = new Map<string, Message[]>();
 
-export function ensureQueue(name: string): void {
-  if (!messageQueues.has(name)) {
-    messageQueues.set(name, []);
+  function ensureQueue(name: string): void {
+    if (!messageQueues.has(name)) {
+      messageQueues.set(name, []);
+    }
   }
-}
 
-/** Snapshot of all non-empty queues, e.g. to save them before a restart. */
-export function getAllQueues(): Map<string, Message[]> {
-  return new Map([...messageQueues].filter(([, q]) => q.length > 0).map(([n, q]) => [n, [...q]]));
-}
+  /** Snapshot of all non-empty queues, e.g. to save them before a restart. */
+  function getAllQueues(): Map<string, Message[]> {
+    return new Map([...messageQueues].filter(([, q]) => q.length > 0).map(([n, q]) => [n, [...q]]));
+  }
 
-export function resetQueues(): void {
-  messageQueues.clear();
-}
+  function resetQueues(): void {
+    messageQueues.clear();
+  }
 
-export function removeQueue(name: string): void {
-  messageQueues.delete(name);
-}
+  function removeQueue(name: string): void {
+    messageQueues.delete(name);
+  }
 
-export function drainQueue(name: string): Message[] {
-  const queue = messageQueues.get(name);
-  if (!queue || queue.length === 0) return [];
-  const messages = [...queue];
-  queue.length = 0;
-  return messages;
-}
+  function drainQueue(name: string): Message[] {
+    const queue = messageQueues.get(name);
+    if (!queue || queue.length === 0) return [];
+    const messages = [...queue];
+    queue.length = 0;
+    return messages;
+  }
 
-export function routeMessage(
-  from: string,
-  to: string,
-  content: string,
-  channel = "#all",
-  image?: MessageImage,
-): Message {
-  const members = getChannelMembers(channel);
-  const senderRole = getUserRole(from) ?? undefined;
+  function routeMessage(from: string, to: string, content: string, channel = "#all", image?: MessageImage): Message {
+    const members = getChannelMembers(channel);
+    const senderRole = getUserRole(from) ?? undefined;
 
-  if (to === "@all") {
+    if (to === "@all") {
+      const message: Message = {
+        id: randomUUID(),
+        from,
+        to: "@all",
+        content,
+        channel,
+        timestamp: Date.now(),
+        image,
+        fromRole: senderRole,
+      };
+
+      dbSaveMessage(message);
+
+      // Deliver to all channel members except sender.
+      // When a bridge sends @all, skip other bridges to avoid relay loops.
+      // Humans read everything from the dashboard event stream, so they get no queue.
+      for (const user of members) {
+        if (user === from) continue;
+        if (getUserRole(user) === "human") continue;
+        if (senderRole === "bridge" && getUserRole(user) === "bridge") continue;
+        enqueueAndDeliver(user, message);
+      }
+      return message;
+    }
+
+    const targetName = to.startsWith("@") ? to.slice(1) : to;
+
+    if (!isUserRegistered(targetName)) {
+      throw new Error(`User "${targetName}" is not connected`);
+    }
+
+    // Humans see every channel on the dashboard, so they can be addressed from any channel
+    if (getUserRole(targetName) !== "human" && !isChannelMember(channel, targetName)) {
+      throw new Error(`User "${targetName}" is not a member of ${channel}`);
+    }
+
     const message: Message = {
       id: randomUUID(),
       from,
-      to: "@all",
+      to: targetName,
       content,
       channel,
       timestamp: Date.now(),
@@ -58,69 +93,47 @@ export function routeMessage(
 
     dbSaveMessage(message);
 
-    // Deliver to all channel members except sender.
-    // When a bridge sends @all, skip other bridges to avoid relay loops.
-    // Humans read everything from the dashboard event stream, so they get no queue.
+    // Deliver to all channel members except sender
     for (const user of members) {
-      if (user === from) continue;
-      if (getUserRole(user) === "human") continue;
-      if (senderRole === "bridge" && getUserRole(user) === "bridge") continue;
-      enqueueAndDeliver(user, message);
+      if (user !== from && getUserRole(user) !== "human") {
+        enqueueAndDeliver(user, message);
+      }
     }
     return message;
   }
 
-  const targetName = to.startsWith("@") ? to.slice(1) : to;
-
-  if (!isUserRegistered(targetName)) {
-    throw new Error(`User "${targetName}" is not connected`);
+  function enqueueAndDeliver(targetName: string, message: Message): void {
+    ensureQueue(targetName);
+    const queue = messageQueues.get(targetName)!;
+    queue.push(message);
+    deliverMessage(targetName);
   }
 
-  // Humans see every channel on the dashboard, so they can be addressed from any channel
-  if (getUserRole(targetName) !== "human" && !isChannelMember(channel, targetName)) {
-    throw new Error(`User "${targetName}" is not a member of ${channel}`);
-  }
-
-  const message: Message = {
-    id: randomUUID(),
-    from,
-    to: targetName,
-    content,
-    channel,
-    timestamp: Date.now(),
-    image,
-    fromRole: senderRole,
-  };
-
-  dbSaveMessage(message);
-
-  // Deliver to all channel members except sender
-  for (const user of members) {
-    if (user !== from && getUserRole(user) !== "human") {
-      enqueueAndDeliver(user, message);
+  function notifyBridges(content: string): void {
+    const bridges = getUsersByRole("bridge");
+    const message: Message = {
+      id: randomUUID(),
+      from: "system",
+      to: "@bridges",
+      content,
+      channel: "#all",
+      timestamp: Date.now(),
+    };
+    for (const bridge of bridges) {
+      enqueueAndDeliver(bridge, message);
     }
   }
-  return message;
-}
 
-export function enqueueAndDeliver(targetName: string, message: Message): void {
-  ensureQueue(targetName);
-  const queue = messageQueues.get(targetName)!;
-  queue.push(message);
-  deliverMessage(targetName);
-}
-
-export function notifyBridges(content: string): void {
-  const bridges = getUsersByRole("bridge");
-  const message: Message = {
-    id: randomUUID(),
-    from: "system",
-    to: "@bridges",
-    content,
-    channel: "#all",
-    timestamp: Date.now(),
+  return {
+    ensureQueue,
+    getAllQueues,
+    resetQueues,
+    removeQueue,
+    drainQueue,
+    routeMessage,
+    enqueueAndDeliver,
+    notifyBridges,
   };
-  for (const bridge of bridges) {
-    enqueueAndDeliver(bridge, message);
-  }
 }
+
+export type Router = ReturnType<typeof createRouter>;

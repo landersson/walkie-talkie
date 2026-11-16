@@ -1,9 +1,6 @@
 import { execFile } from "node:child_process";
-import { initGeneralChannel } from "./channels.js";
-import { initDB } from "./db.js";
-import { closeAllSSEClients } from "./events.js";
 import { autoLaunchAgents } from "./launcher.js";
-import { createHubServer, prepareShutdown } from "./server.js";
+import { agentConfigsOfAllProjects, closeAllEventStreams, createHubServer, prepareShutdown } from "./server.js";
 
 const port = parseInt(process.env.PORT ?? "9559", 10);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -20,9 +17,6 @@ if (!adminToken) {
   process.exit(1);
 }
 
-initDB();
-initGeneralChannel();
-
 const server = createHubServer(port, adminToken, joinToken, host);
 
 // After the server is listening, open the dashboard and auto-launch agents
@@ -30,7 +24,7 @@ server.on("listening", () => {
   execFile("open", [`http://localhost:${port}`], (err) => {
     if (err) console.error(`[open] Failed to open browser: ${err.message}`);
   });
-  autoLaunchAgents();
+  autoLaunchAgents(agentConfigsOfAllProjects());
 });
 
 // Graceful shutdown. SIGTERM (e.g. systemctl restart/stop) is treated as a restart: agents
@@ -47,7 +41,7 @@ function handleShutdown(signal: NodeJS.Signals): void {
   const mode = signal === "SIGINT" ? "stop" : "restart";
   console.log(`\n[shutdown] ${signal}: notifying connected users (${mode})...`);
   prepareShutdown(mode);
-  closeAllSSEClients();
+  closeAllEventStreams();
   server.close(() => {
     console.log("[shutdown] Hub stopped.");
     process.exit(0);

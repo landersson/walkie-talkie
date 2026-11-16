@@ -1,3 +1,4 @@
+import { FAVICON_HREF } from "./icon.js";
 import { renderMarkdown } from "./markdown.js";
 
 export function getDashboardHTML(): string {
@@ -7,7 +8,7 @@ export function getDashboardHTML(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Walkie-Talkie</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2032%2032'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'g'%20x1%3D'0'%20y1%3D'0'%20x2%3D'1'%20y2%3D'1'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'%23818cf8'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'%23a78bfa'%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7'%20fill%3D'url(%23g)'%2F%3E%3Crect%20x%3D'9.5'%20y%3D'2.5'%20width%3D'3'%20height%3D'9'%20rx%3D'1.5'%20fill%3D'%23fff'%2F%3E%3Crect%20x%3D'18.5'%20y%3D'6'%20width%3D'3'%20height%3D'4'%20rx%3D'1'%20fill%3D'%23fff'%2F%3E%3Crect%20x%3D'8'%20y%3D'9'%20width%3D'16'%20height%3D'20'%20rx%3D'3.5'%20fill%3D'%23fff'%2F%3E%3Crect%20x%3D'11'%20y%3D'12.5'%20width%3D'10'%20height%3D'2'%20rx%3D'1'%20fill%3D'%236d68f2'%2F%3E%3Crect%20x%3D'11'%20y%3D'16.5'%20width%3D'10'%20height%3D'2'%20rx%3D'1'%20fill%3D'%236d68f2'%2F%3E%3Crect%20x%3D'11'%20y%3D'20.5'%20width%3D'10'%20height%3D'2'%20rx%3D'1'%20fill%3D'%236d68f2'%2F%3E%3Ccircle%20cx%3D'16'%20cy%3D'25.5'%20r%3D'1.4'%20fill%3D'%236d68f2'%2F%3E%3C%2Fsvg%3E">
+<link rel="icon" type="image/svg+xml" href="${FAVICON_HREF}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -368,6 +369,10 @@ export function getDashboardHTML(): string {
     margin-left: 6px;
     flex-shrink: 0;
   }
+  body.embedded header .logo,
+  body.embedded header .header-sep,
+  body.embedded #whoami,
+  body.embedded #switch-user-btn { display: none; }
   .whoami {
     font-family: var(--mono);
     font-size: 11px;
@@ -1292,8 +1297,29 @@ export function getDashboardHTML(): string {
     let unseenWhileHidden = false;
     let faviconDot = false;
 
+    // Inside the project tabs page (/), this dashboard shows one project. The tabs page does the
+    // login and tells the dashboard whether its tab is the one on screen.
+    const EMBEDDED = window.parent !== window && new URLSearchParams(location.search).has("embedded");
+    const pathParts = location.pathname.split("/"); // "/p/<project>/" -> ["", "p", project, ""]
+    const PROJECT = pathParts[1] === "p" && pathParts[2] ? decodeURIComponent(pathParts[2]) : "default";
+    let paneActive = true;
+    if (EMBEDDED) document.body.classList.add("embedded");
+    window.addEventListener("message", (e) => {
+      if (e.origin !== location.origin || !e.data || e.data.type !== "walkie-active") return;
+      paneActive = !!e.data.active;
+      if (paneActive) {
+        unseenWhileHidden = false;
+        if (unreadCounts[selectedChannel] && ADMIN_TOKEN) markChannelRead(selectedChannel);
+        updateFavicon();
+      }
+    });
+
     function updateFavicon() {
       const hasNew = unseenWhileHidden || Object.values(unreadCounts).some(n => n > 0);
+      if (EMBEDDED) {
+        const unread = Object.values(unreadCounts).reduce((a, n) => a + n, 0);
+        parent.postMessage({ type: "walkie-unread", project: PROJECT, unread, dot: hasNew }, location.origin);
+      }
       if (hasNew === faviconDot) return;
       faviconDot = hasNew;
       faviconEl.setAttribute("href", hasNew ? dotIcon : plainIcon);
@@ -1320,7 +1346,7 @@ export function getDashboardHTML(): string {
     }
 
     function kick(name) {
-      fetch("/kick", {
+      fetch("kick", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({ name }),
@@ -1402,7 +1428,7 @@ export function getDashboardHTML(): string {
     }
 
     function agentLaunch(id) {
-      fetch("/admin-agent-start", {
+      fetch("admin-agent-start", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({ id }),
@@ -1412,7 +1438,7 @@ export function getDashboardHTML(): string {
     }
 
     function agentDelete(id) {
-      fetch("/admin-agent-config-delete", {
+      fetch("admin-agent-config-delete", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({ id }),
@@ -1422,7 +1448,7 @@ export function getDashboardHTML(): string {
     }
 
     function refreshAgentConfigs() {
-      fetch("/admin-agent-configs", { headers: adminHeaders })
+      fetch("admin-agent-configs", { headers: adminHeaders })
         .then(r => r.json())
         .then(data => {
           agentConfigs.clear();
@@ -1434,7 +1460,7 @@ export function getDashboardHTML(): string {
     }
 
     function refreshChannels() {
-      fetch("/channels").then(r => r.json()).then(data => {
+      fetch("channels").then(r => r.json()).then(data => {
         channels.clear();
         for (const ch of data.channels) {
           channels.set(ch.name, {
@@ -1504,7 +1530,7 @@ export function getDashboardHTML(): string {
     }
 
     function markChannelRead(channel) {
-      fetch("/admin-mark-read", {
+      fetch("admin-mark-read", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({ channel }),
@@ -1686,7 +1712,7 @@ export function getDashboardHTML(): string {
       if (st.done || st.loading) return;
       st.loading = true;
       renderHistoryStatus();
-      let url = "/admin-channel-history?channel=" + encodeURIComponent(channel) + "&limit=" + HISTORY_PAGE;
+      let url = "admin-channel-history?channel=" + encodeURIComponent(channel) + "&limit=" + HISTORY_PAGE;
       if (st.oldest) url += "&before=" + st.oldest + (st.oldestSeq ? "&beforeSeq=" + st.oldestSeq : "");
       fetch(url, { headers: adminHeaders })
         .then(r => r.json())
@@ -1734,7 +1760,7 @@ export function getDashboardHTML(): string {
     };
 
     document.getElementById("stop-all").onclick = () => {
-      fetch("/kick-all", { method: "POST", headers: adminHeaders });
+      fetch("kick-all", { method: "POST", headers: adminHeaders });
     };
 
     // Send from dashboard
@@ -2044,7 +2070,7 @@ export function getDashboardHTML(): string {
       const target = recipientTarget;
       const payload = { to: target, content, channel };
       if (pendingImage) payload.image = pendingImage;
-      fetch("/admin-send", {
+      fetch("admin-send", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify(payload),
@@ -2204,7 +2230,7 @@ export function getDashboardHTML(): string {
       if (!name || !AGENT_NAME_RE.test(name)) { agentDialogName.focus(); updateCommandPreview(); return; }
       if (!workDir) { agentDialogWorkdir.focus(); return; }
       if (id) {
-        fetch("/admin-agent-config-update", {
+        fetch("admin-agent-config-update", {
           method: "POST",
           headers: adminHeaders,
           body: JSON.stringify({ id, name, workDir, autoStart }),
@@ -2213,7 +2239,7 @@ export function getDashboardHTML(): string {
           else closeAgentDialog();
         }).catch(() => {});
       } else {
-        fetch("/admin-agent-config-create", {
+        fetch("admin-agent-config-create", {
           method: "POST",
           headers: adminHeaders,
           body: JSON.stringify({ name, workDir }),
@@ -2255,12 +2281,12 @@ export function getDashboardHTML(): string {
       const description = channelDialogDescription.value.trim();
       let url, body;
       if (channelDialogEditing) {
-        url = "/admin-channel-describe";
+        url = "admin-channel-describe";
         body = { name: channelDialogEditing, description };
       } else {
         const name = channelDialogName.value.trim();
         if (!name) { channelDialogName.focus(); return; }
-        url = "/admin-channel-create";
+        url = "admin-channel-create";
         body = { name, description };
       }
       fetch(url, { method: "POST", headers: adminHeaders, body: JSON.stringify(body) })
@@ -2289,7 +2315,7 @@ export function getDashboardHTML(): string {
     };
 
     function deleteChannel(name) {
-      fetch("/admin-channel-delete", {
+      fetch("admin-channel-delete", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({ name }),
@@ -2300,7 +2326,7 @@ export function getDashboardHTML(): string {
 
     function startDashboard() {
       // Fetch initial data
-      const usersLoaded = fetch("/users").then(r => r.json()).then(data => {
+      const usersLoaded = fetch("users").then(r => r.json()).then(data => {
         for (const u of data.users) {
           users.set(u.name, u.online);
           if (u.role === "human") humans.add(u.name);
@@ -2308,7 +2334,7 @@ export function getDashboardHTML(): string {
         renderUsers();
       }).catch(() => {});
 
-      fetch("/channels").then(r => r.json()).then(data => {
+      fetch("channels").then(r => r.json()).then(data => {
         for (const ch of data.channels) {
           channels.set(ch.name, {
             memberCount: ch.memberCount,
@@ -2326,7 +2352,7 @@ export function getDashboardHTML(): string {
       refreshAgentConfigs();
 
       // Load unread counts
-      fetch("/admin-unread-counts", { headers: adminHeaders })
+      fetch("admin-unread-counts", { headers: adminHeaders })
         .then(r => r.json())
         .then(data => {
           if (data.counts) {
@@ -2340,10 +2366,10 @@ export function getDashboardHTML(): string {
       // Load the open channel's history (after users, so human senders are known)
       usersLoaded.then(() => {
         loadHistory(selectedChannel);
-        markChannelRead(selectedChannel);
+        if (paneActive) markChannelRead(selectedChannel);
       });
 
-      const es = new EventSource("/events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
+      const es = new EventSource("events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
 
       es.onmessage = (e) => {
         const ev = JSON.parse(e.data);
@@ -2389,7 +2415,7 @@ export function getDashboardHTML(): string {
           if (!historyState[msgChannel] && !firstLiveTs[msgChannel]) firstLiveTs[msgChannel] = ev.timestamp;
           addMessage(messageHtml(ev), messageClass(ev.from, ev.fromRole), msgChannel, ev.timestamp);
           // Unread tracking
-          if (msgChannel === selectedChannel) {
+          if (msgChannel === selectedChannel && paneActive) {
             if (document.hidden && ev.from !== MY_NAME) unseenWhileHidden = true;
             markChannelRead(msgChannel);
           } else {
@@ -2508,7 +2534,7 @@ export function getDashboardHTML(): string {
 
     // Resolves to null on success, or { field, error } describing what to ask for again
     function tryLogin(token, name) {
-      return fetch("/admin-login", { method: "POST", headers: { "Authorization": "Bearer " + token, "X-Walkie-User": name } })
+      return fetch("admin-login", { method: "POST", headers: { "Authorization": "Bearer " + token, "X-Walkie-User": name } })
         .then(r => r.json().catch(() => ({})).then(data => {
           if (r.status === 401) return { field: "token", error: "Invalid admin token" };
           if (!r.ok) return { field: "name", error: data.error || "That name can't be used" };
@@ -2566,6 +2592,13 @@ export function getDashboardHTML(): string {
       location.reload();
     };
 
+    if (EMBEDDED) {
+      const embeddedName = new URLSearchParams(location.search).get("name");
+      if (embeddedName) {
+        store(USER_STORAGE_KEY, embeddedName, true);
+        store(SWITCH_USER_KEY, "", true);
+      }
+    }
     loginNeedsToken = !readStored(TOKEN_STORAGE_KEY);
     loginNeedsName = !rememberedName();
     if (loginNeedsToken || loginNeedsName) showLogin();

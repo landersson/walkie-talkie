@@ -3,10 +3,6 @@ import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetAuthState } from "../auth.js";
-import { initGeneralChannel, resetChannelState } from "../channels.js";
-import { initDB } from "../db.js";
-import { resetQueues } from "../router.js";
 import { createHubServer, expireIdleSessions, prepareShutdown } from "../server.js";
 
 const JOIN = "join";
@@ -16,12 +12,10 @@ let server: Server | null = null;
 
 // Simulates a hub process start: fresh in-memory state, same database file
 async function startHub(): Promise<string> {
-  resetAuthState();
-  resetChannelState();
-  resetQueues();
-  initDB();
-  initGeneralChannel();
-  server = createHubServer(0, ADMIN, JOIN);
+  server = createHubServer(0, ADMIN, JOIN, "127.0.0.1", {
+    dbPath: path.join(dir, "hub.db"),
+    projectsDir: path.join(dir, "projects"),
+  });
   await new Promise<void>((resolve) => server!.on("listening", resolve));
   const addr = server.address();
   return `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
@@ -52,7 +46,6 @@ async function call(base: string, token: string, route: string, body?: unknown):
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "walkie-restart-"));
-  process.env.WALKIE_TALKIE_DB_PATH = path.join(dir, "hub.db");
 });
 
 afterEach(async () => {
