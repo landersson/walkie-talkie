@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/** The project that unprefixed routes and the original database belong to. */
+/**
+ * Name of the default project, which unprefixed routes (a plain HUB_URL) and the hub's main
+ * database belong to, unless $WALKIE_TALKIE_DEFAULT_PROJECT names it differently or is "none".
+ */
 export const DEFAULT_PROJECT = "default";
+export const NO_DEFAULT_PROJECT = "none";
 
 /** Project names and the names humans log in with. */
 export const NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
@@ -27,7 +31,7 @@ export function listProjectNames(dir: string): string[] {
     .readdirSync(dir)
     .filter((f) => f.endsWith(".db"))
     .map((f) => f.slice(0, -3))
-    .filter((name) => name !== DEFAULT_PROJECT && !validateProjectName(name))
+    .filter((name) => !validateProjectName(name))
     .sort((a, b) => a.localeCompare(b));
 }
 

@@ -13,6 +13,7 @@ import {
   listProjectNames,
   NAME_RE,
   NAME_RULES,
+  NO_DEFAULT_PROJECT,
   projectDbPath,
   validateProjectName,
 } from "./projects.js";
@@ -64,6 +65,14 @@ function checkMethod(route: Route, req: IncomingMessage, res: ServerResponse): b
 }
 
 type HumanError = { status: number; error: string } | null;
+
+/** Why `name` can't be a human's name, or null if it can. */
+function humanNameError(name: string): HumanError {
+  if (!NAME_RE.test(name) || RESERVED_NAMES.has(name)) {
+    return { status: 400, error: `Invalid name "${name}" (${NAME_RULES})` };
+  }
+  return null;
+}
 
 /**
  * The human opening a dashboard live stream, or null after replying with an error.
@@ -149,9 +158,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
    * Returns an HTTP error when the name is invalid or already held by an agent/bridge.
    */
   function ensureHuman(name: string): HumanError {
-    if (!NAME_RE.test(name) || RESERVED_NAMES.has(name)) {
-      return { status: 400, error: `Invalid name "${name}" (${NAME_RULES})` };
-    }
+    const invalid = humanNameError(name);
+    if (invalid) return invalid;
     const role = getUserRole(name);
     if (role === "human") return null;
     if (role) {
@@ -1052,6 +1060,11 @@ type HubWideEvent =
 export interface HubOptions {
   /** Database of the default project (default: $WALKIE_TALKIE_DB_PATH or ./walkie-talkie.db). */
   dbPath?: string;
+  /**
+   * Name of the default project, which a plain HUB_URL (no /p/<project>) reaches; null for a hub
+   * without one (default: $WALKIE_TALKIE_DEFAULT_PROJECT, where "none" means null, or "default").
+   */
+  defaultProject?: string | null;
   /** Folder holding the other projects' databases; null keeps new projects in memory. */
   projectsDir?: string | null;
 }
@@ -1086,6 +1099,15 @@ export function createHubServer(
       : (process.env.WALKIE_TALKIE_PROJECTS_DIR ??
         (dbPath === ":memory:" ? null : path.join(path.dirname(dbPath), "projects")));
   if (projectsDir) fs.mkdirSync(projectsDir, { recursive: true });
+  const envDefault = process.env.WALKIE_TALKIE_DEFAULT_PROJECT || DEFAULT_PROJECT;
+  const defaultName =
+    options.defaultProject !== undefined
+      ? options.defaultProject
+      : envDefault === NO_DEFAULT_PROJECT
+        ? null
+        : envDefault;
+  const invalidDefault = defaultName === null ? null : validateProjectName(defaultName);
+  if (invalidDefault) throw new Error(`WALKIE_TALKIE_DEFAULT_PROJECT: ${invalidDefault}`);
 
   const apps = new Map<string, ProjectApp>();
   const events = createEventStream<HubWideEvent>();
@@ -1125,14 +1147,24 @@ export function createHubServer(
     return app;
   }
 
-  openProject(DEFAULT_PROJECT, dbPath);
+  const defaultApp = defaultName === null ? null : openProject(defaultName, dbPath);
   if (projectsDir) {
-    for (const name of listProjectNames(projectsDir)) openProject(name, projectDbPath(projectsDir, name));
+    for (const name of listProjectNames(projectsDir)) {
+      if (name === defaultName) {
+        console.error(`[project] skipping ${projectDbPath(projectsDir, name)}: "${name}" is the default project`);
+        continue;
+      }
+      openProject(name, projectDbPath(projectsDir, name));
+    }
   }
 
+  /** The default project first, then the others by name. */
   function listProjects() {
-    const names = [...apps.keys()].filter((n) => n !== DEFAULT_PROJECT).sort((a, b) => a.localeCompare(b));
-    return [DEFAULT_PROJECT, ...names].map((name) => ({ name, default: name === DEFAULT_PROJECT }));
+    const names = [...apps.keys()].filter((n) => n !== defaultName).sort((a, b) => a.localeCompare(b));
+    return [...(defaultApp ? [defaultName as string] : []), ...names].map((name) => ({
+      name,
+      default: name === defaultName,
+    }));
   }
 
   async function handleProjectCreate(req: IncomingMessage, res: ServerResponse, caller?: string): Promise<void> {
@@ -1150,7 +1182,7 @@ export function createHubServer(
   async function handleProjectArchive(req: IncomingMessage, res: ServerResponse, caller?: string): Promise<void> {
     const body = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
     const name = typeof body.name === "string" ? body.name : "";
-    if (name === DEFAULT_PROJECT) return sendError(res, 400, "The default project can't be archived");
+    if (name === defaultName) return sendError(res, 400, "The default project can't be archived");
     const app = apps.get(name);
     if (!app) return sendError(res, 404, `Project "${name}" not found`);
     apps.delete(name);
@@ -1164,7 +1196,7 @@ export function createHubServer(
   }
 
   function handleHubEvents(url: URL, res: ServerResponse) {
-    const name = streamHuman(url, res, adminToken, apps.get(DEFAULT_PROJECT)!.ensureHuman);
+    const name = streamHuman(url, res, adminToken, defaultApp ? defaultApp.ensureHuman : humanNameError);
     if (!name) return;
     const presence = { name, apps: new Set<ProjectApp>() };
     for (const app of apps.values()) attachPresence(presence, app);
@@ -1181,6 +1213,17 @@ export function createHubServer(
     "/admin-project-create": { method: "POST", handler: handleProjectCreate },
     "/admin-project-archive": { method: "POST", handler: handleProjectArchive },
   };
+  // The project tabs page logs in here; with a default project, that project checks the name
+  if (!defaultApp) {
+    hubRoutes["/admin-login"] = {
+      method: "POST",
+      handler: async (_req, res, caller = DEFAULT_HUMAN) => {
+        const invalid = humanNameError(caller);
+        if (invalid) return sendError(res, invalid.status, invalid.error);
+        sendJson(res, 200, { ok: true, name: caller });
+      },
+    };
+  }
 
   function dispatchHub(req: IncomingMessage, res: ServerResponse, url: URL): boolean {
     if (url.pathname === "/hub-events" && req.method === "GET") {
@@ -1205,7 +1248,7 @@ export function createHubServer(
     }
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
-    // /p/<project>/<route> is that project; anything else is the default project
+    // /p/<project>/<route> is that project; anything else is the default project, if there is one
     const prefixed = /^\/p\/([^/]+)(\/.*)?$/.exec(url.pathname);
     if (prefixed) {
       const name = decodeURIComponent(prefixed[1]);
@@ -1224,7 +1267,14 @@ export function createHubServer(
 
     if (url.pathname === "/" && req.method === "GET") return sendHtml(res, getShellHTML());
     if (dispatchHub(req, res, url)) return;
-    if (!apps.get(DEFAULT_PROJECT)!.dispatch(req, res, url, url.pathname)) sendError(res, 404, "Not found");
+    if (!defaultApp) {
+      return sendError(
+        res,
+        404,
+        "This hub has no default project: use /p/<project>/, e.g. HUB_URL=http://<hub>/p/<project>",
+      );
+    }
+    if (!defaultApp.dispatch(req, res, url, url.pathname)) sendError(res, 404, "Not found");
   }
 
   const server = createServer(handleRequest);

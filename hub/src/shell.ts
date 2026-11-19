@@ -6,7 +6,6 @@ import {
   LOGIN_SCRIPT,
   THEME_CSS,
 } from "./page-common.js";
-import { DEFAULT_PROJECT } from "./projects.js";
 
 /**
  * The page at "/": one tab per project, each showing that project's dashboard (/p/<name>/) in
@@ -121,6 +120,7 @@ ${THEME_CSS}
   #frames { flex: 1; position: relative; min-height: 0; }
   #frames iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: none; background: var(--bg-base); }
   #frames iframe.active { display: block; }
+  #no-projects { padding: 64px 16px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 ${DIALOG_CSS}
   .dialog p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
   .dialog p code { font-family: var(--mono); font-size: 12px; color: var(--text-primary); word-break: break-all; }
@@ -142,7 +142,9 @@ ${DIALOG_CSS}
     <span class="whoami" id="whoami"></span>
     <button class="header-btn" id="switch-user-btn">Switch user</button>
   </header>
-  <div id="frames"></div>
+  <div id="frames">
+    <div id="no-projects" style="display:none">No projects yet. Create one with <strong>+ Project</strong>.</div>
+  </div>
 
 ${LOGIN_DIALOG_HTML}
 
@@ -179,7 +181,6 @@ ${LOGIN_DIALOG_HTML}
     // The dashboards in the tabs read the login from the same storage, so they don't ask again
 ${LOGIN_SCRIPT}
 
-    const DEFAULT_PROJECT = "${DEFAULT_PROJECT}";
     const ACTIVE_PROJECT_KEY = "walkie-talkie-active-project";
     // Browsers allow 6 connections per server and each open dashboard keeps one for its live
     // stream, so only this many project dashboards stay loaded (most recently used first)
@@ -198,6 +199,12 @@ ${LOGIN_SCRIPT}
 
     const tabsEl = document.getElementById("tabs");
     const framesEl = document.getElementById("frames");
+
+    // The default project (the one a plain HUB_URL reaches), else the first; "" if there are none
+    function fallbackProject() {
+      const p = projects.find((x) => x.default) || projects[0];
+      return p ? p.name : "";
+    }
 
     function projectBase(name) {
       return "/p/" + encodeURIComponent(name) + "/";
@@ -219,9 +226,8 @@ ${LOGIN_SCRIPT}
         const tab = document.createElement("div");
         tab.className = "tab" + (p.name === activeProject ? " active" : "");
         tab.dataset.project = p.name;
-        tab.title = p.default
-          ? "Default project (agents with a plain HUB_URL)"
-          : "Agents join with HUB_URL=" + location.origin + projectBase(p.name).slice(0, -1);
+        tab.title = "Agents join with HUB_URL=" + location.origin + projectBase(p.name).slice(0, -1) +
+          (p.default ? " or just " + location.origin : "");
         const count = unread.get(p.name) || 0;
         tab.innerHTML = '<span class="tab-name">' + escapeHtml(p.name) + "</span>" +
           (count > 0 ? '<span class="badge">' + (count > 99 ? "99+" : count) + "</span>" : "") +
@@ -243,13 +249,18 @@ ${LOGIN_SCRIPT}
     }
 
     function showProject(name) {
-      if (!projects.some((p) => p.name === name)) name = DEFAULT_PROJECT;
+      if (!projects.some((p) => p.name === name)) name = fallbackProject();
       const previous = activeProject;
       activeProject = name;
+      document.getElementById("no-projects").style.display = name ? "none" : "";
+      if (!name) {
+        renderTabs();
+        return;
+      }
       store(ACTIVE_PROJECT_KEY, name);
-      const hash = name === DEFAULT_PROJECT ? "" : "#" + encodeURIComponent(name);
+      const hash = name === fallbackProject() ? "" : "#" + encodeURIComponent(name);
       if (location.hash !== hash) history.replaceState(null, "", "/" + hash);
-      document.title = name === DEFAULT_PROJECT ? "Walkie-Talkie" : name + " · Walkie-Talkie";
+      document.title = name + " · Walkie-Talkie";
 
       let frame = frames.get(name);
       if (!frame) {
@@ -325,7 +336,7 @@ ${LOGIN_SCRIPT}
       unread.delete(name);
       const i = lastUsed.indexOf(name);
       if (i >= 0) lastUsed.splice(i, 1);
-      if (activeProject === name) showProject(DEFAULT_PROJECT);
+      if (activeProject === name) showProject(fallbackProject());
       else renderTabs();
     }
 
@@ -337,7 +348,9 @@ ${LOGIN_SCRIPT}
         let ev;
         try { ev = JSON.parse(msg.data); } catch { return; }
         if (ev.type === "project_create") {
-          if (!projects.some((p) => p.name === ev.name)) loadProjects().then(renderTabs).catch(() => {});
+          if (!projects.some((p) => p.name === ev.name)) {
+            loadProjects().then(() => (activeProject ? renderTabs() : showProject(ev.name))).catch(() => {});
+          }
         } else if (ev.type === "project_archive") {
           removeProject(ev.name);
         } else if (ev.type === "activity" || (ev.type === "read" && ev.userName === MY_NAME)) {
@@ -348,7 +361,7 @@ ${LOGIN_SCRIPT}
       es.onopen = () => {
         if (!opened) { opened = true; return; }
         loadProjects().then(() => {
-          if (!projects.some((p) => p.name === activeProject)) showProject(DEFAULT_PROJECT);
+          if (!projects.some((p) => p.name === activeProject)) showProject(fallbackProject());
           else renderTabs();
         }).catch(() => {});
       };
@@ -429,7 +442,7 @@ ${LOGIN_SCRIPT}
     function onLoggedIn() {
       loadProjects()
         .then(() => {
-          const wanted = decodeURIComponent(location.hash.slice(1)) || readStored(ACTIVE_PROJECT_KEY) || DEFAULT_PROJECT;
+          const wanted = decodeURIComponent(location.hash.slice(1)) || readStored(ACTIVE_PROJECT_KEY);
           showProject(wanted);
           connectHubEvents();
         })

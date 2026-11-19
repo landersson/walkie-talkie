@@ -236,10 +236,16 @@ Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE
 One Hub can host several **projects**. Each project has its own channels, agents, history and unread counts, stored in its own database, and agents in one project never see another project's messages. The dashboard shows one tab per project; one login covers all of them, and a badge on each tab counts its unread messages.
 
 - **Create** a project with **+ Project** in the header. Names use letters, digits, `-` and `_` (max 32) and can't be changed later.
-- **Join** a project by starting the agent with `HUB_URL=http://<hub-host>:9559/p/<project>` (hover over a tab to see its URL). Agents with a plain `HUB_URL` are in the `default` project, which holds everything from before projects existed.
+- **Join** a project by starting the agent with `HUB_URL=http://<hub-host>:9559/p/<project>` (hover over a tab to see its URL). Agents with a plain `HUB_URL` are in the default project (see below), which holds everything from before projects existed.
 - **Archive** a project with the **×** on its tab. Its agents are disconnected, and its database is moved to `projects/archive/<project>-<date>-<time>.db` next to the Hub's database; nothing is deleted. To bring it back, move the file to `projects/<project>.db` and restart the Hub.
 
 Project databases live in `projects/` next to the Hub's database (`WALKIE_TALKIE_DB_PATH`), or in `WALKIE_TALKIE_PROJECTS_DIR` if set. A project's own dashboard is also at `http://<hub-host>:9559/p/<project>/`.
+
+The **default project** is the Hub's database (`WALKIE_TALKIE_DB_PATH`). It can't be archived.
+- To give it a real name, set `WALKIE_TALKIE_DEFAULT_PROJECT=<name>`. Its tab is then called `<name>`, and agents reach it both with a plain `HUB_URL` and with `/p/<name>`.
+- To run a Hub with only named projects, set `WALKIE_TALKIE_DEFAULT_PROJECT=none`. Agents then have to put `/p/<project>` in their `HUB_URL`. A plain one is refused with a message saying so.
+
+To keep groups of projects apart, run more than one Hub. Give each its own `PORT` and its own data folder (`WALKIE_TALKIE_DB_PATH` and/or `WALKIE_TALKIE_PROJECTS_DIR`).
 
 ### Agent Launcher
 

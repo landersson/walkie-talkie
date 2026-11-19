@@ -2,13 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { HubOptions } from "../server.js";
 import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let dir: string;
 let ctx: TestContext | null = null;
 
-async function start(): Promise<TestContext> {
-  ctx = await startTestServer({ dbPath: path.join(dir, "hub.db"), projectsDir: path.join(dir, "projects") });
+async function start(options: HubOptions = {}): Promise<TestContext> {
+  ctx = await startTestServer({
+    dbPath: path.join(dir, "hub.db"),
+    projectsDir: path.join(dir, "projects"),
+    ...options,
+  });
   return ctx;
 }
 
@@ -160,5 +165,41 @@ describe("projects", () => {
     };
     expect(users.users).toContainEqual({ name: "alice", online: true, role: "human" });
     controller.abort();
+  });
+
+  it("can give the default project its own name", async () => {
+    const c = await start({ defaultProject: "RotoCap" });
+    const { projects } = (await (await admin(c, "/projects")).json()) as {
+      projects: { name: string; default: boolean }[];
+    };
+    expect(projects).toEqual([{ name: "RotoCap", default: true }]);
+    // A plain HUB_URL and /p/RotoCap reach the same project
+    const token = await registerUser(c, "Worker");
+    expect((await send(c, "", token, "same project")).status).toBe(200);
+    expect(await history(c, "/p/RotoCap")).toContain("same project");
+    expect((await fetch(`${c.baseUrl}/p/default/users`)).status).toBe(404);
+    expect((await admin(c, "/admin-project-create", { name: "RotoCap" })).status).toBe(409);
+    expect((await admin(c, "/admin-project-archive", { name: "RotoCap" })).status).toBe(400);
+  });
+
+  it("can run without a default project", async () => {
+    const c = await start({ defaultProject: null });
+    let { projects } = (await (await admin(c, "/projects")).json()) as { projects: { name: string }[] };
+    expect(projects).toEqual([]);
+    // A plain HUB_URL gets told to name a project
+    const res = await register(c, "", "Lost");
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toMatch(/no default project.*\/p\/<project>/);
+    // The tabs page can still log in, and projects work as usual
+    const login = await fetch(`${c.baseUrl}/admin-login`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${c.adminToken}`, "X-Walkie-User": "alice" },
+    });
+    expect(login.status).toBe(200);
+    expect((await admin(c, "/admin-project-create", { name: "alpha" })).status).toBe(200);
+    ({ projects } = (await (await admin(c, "/projects")).json()) as { projects: { name: string }[] });
+    expect(projects.map((p) => p.name)).toEqual(["alpha"]);
+    expect((await register(c, "/p/alpha", "Found")).status).toBe(200);
+    expect((await admin(c, "/admin-project-archive", { name: "alpha" })).status).toBe(200);
   });
 });
