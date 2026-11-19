@@ -1,11 +1,12 @@
 import type { Server } from "node:http";
-import { createHubServer, type HubOptions } from "../../server.js";
+import { createHubServer, type Hub, type HubOptions } from "../../server.js";
 
 export interface TestContext {
   baseUrl: string;
   adminToken: string;
   joinToken: string;
   server: Server;
+  hub: Hub;
 }
 
 const ADMIN_TOKEN = "test-admin-token";
@@ -13,11 +14,12 @@ const JOIN_TOKEN = "test-join-token";
 
 export async function startTestServer(options: HubOptions = {}): Promise<TestContext> {
   // Fresh in-memory projects unless the test asks for files
-  const server = createHubServer(0, ADMIN_TOKEN, JOIN_TOKEN, "127.0.0.1", {
+  const hub = createHubServer(0, ADMIN_TOKEN, JOIN_TOKEN, "127.0.0.1", {
     dbPath: ":memory:",
     projectsDir: null,
     ...options,
   });
+  const { server } = hub;
 
   // Wait for server to start listening
   await new Promise<void>((resolve) => {
@@ -32,6 +34,7 @@ export async function startTestServer(options: HubOptions = {}): Promise<TestCon
     adminToken: ADMIN_TOKEN,
     joinToken: JOIN_TOKEN,
     server,
+    hub,
   };
 }
 
@@ -41,8 +44,9 @@ export async function stopTestServer(ctx: TestContext): Promise<void> {
   });
 }
 
-export async function registerUser(ctx: TestContext, name: string): Promise<string> {
-  const res = await fetch(`${ctx.baseUrl}/register`, {
+/** Registers an agent, in the default project unless `prefix` (e.g. "/p/alpha") says otherwise. */
+export async function registerUser(ctx: TestContext, name: string, prefix = ""): Promise<string> {
+  const res = await fetch(`${ctx.baseUrl}${prefix}/register`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

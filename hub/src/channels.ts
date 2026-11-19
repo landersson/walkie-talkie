@@ -2,13 +2,7 @@ import type { ProjectDB } from "./db.js";
 
 export function createChannels(db: ProjectDB) {
   const { dbAddChannelMember, dbGetChannel, dbRemoveAllMembersOfChannel, dbRemoveChannelMember } = db;
-  const channelMembers = new Map<string, Set<string>>();
-
-  function initGeneralChannel(): void {
-    if (!channelMembers.has("#all")) {
-      channelMembers.set("#all", new Set());
-    }
-  }
+  const channelMembers = new Map<string, Set<string>>([["#all", new Set()]]);
 
   function joinChannel(channel: string, userName: string): void {
     const dbChannel = dbGetChannel(channel);
@@ -77,12 +71,7 @@ export function createChannels(db: ProjectDB) {
     dbRemoveAllMembersOfChannel(channel);
   }
 
-  function resetChannelState(): void {
-    channelMembers.clear();
-  }
-
   return {
-    initGeneralChannel,
     joinChannel,
     leaveChannel,
     removeUserFromAllChannels,
@@ -92,7 +81,6 @@ export function createChannels(db: ProjectDB) {
     getChannelMemberCounts,
     ensureChannelMembership,
     removeChannel,
-    resetChannelState,
   };
 }
 

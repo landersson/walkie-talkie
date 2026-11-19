@@ -23,10 +23,6 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
     return new Map([...messageQueues].filter(([, q]) => q.length > 0).map(([n, q]) => [n, [...q]]));
   }
 
-  function resetQueues(): void {
-    messageQueues.clear();
-  }
-
   function removeQueue(name: string): void {
     messageQueues.delete(name);
   }
@@ -127,7 +123,6 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
   return {
     ensureQueue,
     getAllQueues,
-    resetQueues,
     removeQueue,
     drainQueue,
     routeMessage,

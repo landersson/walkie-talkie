@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { getDashboardHTML } from "./dashboard.js";
 import type { AgentConfigRow } from "./db.js";
@@ -11,6 +11,8 @@ import {
   archiveProjectFiles,
   DEFAULT_PROJECT,
   listProjectNames,
+  NAME_RE,
+  NAME_RULES,
   projectDbPath,
   validateProjectName,
 } from "./projects.js";
@@ -18,7 +20,6 @@ import { getShellHTML } from "./shell.js";
 import type { RegisterRequest, RouteHandler, SendRequest, UserRole } from "./types.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
-const HUMAN_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 const RESERVED_NAMES = new Set(["system", "slack"]);
 const DEFAULT_HUMAN = "operator";
 
@@ -45,6 +46,46 @@ function authenticateBearer(req: IncomingMessage, expected: string): boolean {
   if (!auth) return false;
   const [scheme, token] = auth.split(" ");
   return scheme === "Bearer" && token === expected;
+}
+
+type Route = { method: string; handler: RouteHandler };
+type RouteTable = Record<string, Route>;
+
+function runRoute(route: Route, req: IncomingMessage, res: ServerResponse, userName?: string): void {
+  route.handler(req, res, userName).catch((e) => {
+    sendError(res, 500, (e as Error).message);
+  });
+}
+
+function checkMethod(route: Route, req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.method === route.method) return true;
+  sendError(res, 405, "Method not allowed");
+  return false;
+}
+
+type HumanError = { status: number; error: string } | null;
+
+/**
+ * The human opening a dashboard live stream, or null after replying with an error.
+ * EventSource cannot send headers, so the admin token and the name are query params.
+ */
+function streamHuman(
+  url: URL,
+  res: ServerResponse,
+  adminToken: string,
+  ensureHuman: (name: string) => HumanError,
+): string | null {
+  if (url.searchParams.get("token") !== adminToken) {
+    sendError(res, 401, "Unauthorized");
+    return null;
+  }
+  const name = url.searchParams.get("name") || DEFAULT_HUMAN;
+  const error = ensureHuman(name);
+  if (error) {
+    sendError(res, error.status, error.error);
+    return null;
+  }
+  return name;
 }
 
 /**
@@ -107,9 +148,9 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
    * Register `name` as a human user if needed.
    * Returns an HTTP error when the name is invalid or already held by an agent/bridge.
    */
-  function ensureHuman(name: string): { status: number; error: string } | null {
-    if (!HUMAN_NAME_RE.test(name) || RESERVED_NAMES.has(name)) {
-      return { status: 400, error: `Invalid name "${name}" (use letters, digits, - or _, max 32)` };
+  function ensureHuman(name: string): HumanError {
+    if (!NAME_RE.test(name) || RESERVED_NAMES.has(name)) {
+      return { status: 400, error: `Invalid name "${name}" (${NAME_RULES})` };
     }
     const role = getUserRole(name);
     if (role === "human") return null;
@@ -708,16 +749,16 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
   };
 
-  const publicRoutes: Record<string, { method: string; handler: RouteHandler }> = {
+  const publicRoutes: RouteTable = {
     "/users": { method: "GET", handler: handleUsers },
     "/channels": { method: "GET", handler: handleListChannels },
   };
 
-  const joinRoutes: Record<string, { method: string; handler: RouteHandler }> = {
+  const joinRoutes: RouteTable = {
     "/register": { method: "POST", handler: handleRegister },
   };
 
-  const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
+  const adminRoutes: RouteTable = {
     "/admin-login": { method: "POST", handler: handleAdminLogin },
     "/kick": { method: "POST", handler: handleKick },
     "/kick-all": { method: "POST", handler: handleKickAll },
@@ -735,7 +776,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     "/admin-agent-start": { method: "POST", handler: handleAdminAgentStart },
   };
 
-  const protectedRoutes: Record<string, { method: string; handler: RouteHandler }> = {
+  const protectedRoutes: RouteTable = {
     "/send": { method: "POST", handler: handleSend },
     "/poll": { method: "GET", handler: handlePoll },
     "/inbox": { method: "GET", handler: handleInbox },
@@ -852,7 +893,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   }
 
   /**
-   * Tell agents and bridges the hub is going away and end all open polls.
+   * Tell agents and bridges the hub is going away, and end all open polls and dashboard streams.
    * "restart": sessions and undelivered messages are kept for the next start (RADIO_RESTART).
    * "stop": everyone is disconnected and sessions are dropped (RADIO_KILLED).
    */
@@ -883,39 +924,13 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       dbDeleteAllSessions();
     }
     closeAllPolls();
+    project.events.closeAllSSEClients();
   }
 
-  type RouteTable = Record<string, { method: string; handler: RouteHandler }>;
-
-  function runRoute(
-    route: { method: string; handler: RouteHandler },
-    req: IncomingMessage,
-    res: ServerResponse,
-    userName?: string,
-  ): void {
-    route.handler(req, res, userName).catch((e) => {
-      sendError(res, 500, (e as Error).message);
-    });
-  }
-
-  function checkMethod(route: { method: string }, req: IncomingMessage, res: ServerResponse): boolean {
-    if (req.method === route.method) return true;
-    sendError(res, 405, "Method not allowed");
-    return false;
-  }
-
-  /** The dashboard's live stream: EventSource cannot send headers, so the token is a query param. */
+  /** The dashboard's live stream; its human is online while it is open. */
   function handleEvents(url: URL, res: ServerResponse): void {
-    if (url.searchParams.get("token") !== adminToken) {
-      sendError(res, 401, "Unauthorized");
-      return;
-    }
-    const humanName = url.searchParams.get("name") || DEFAULT_HUMAN;
-    const humanError = ensureHuman(humanName);
-    if (humanError) {
-      sendError(res, humanError.status, humanError.error);
-      return;
-    }
+    const humanName = streamHuman(url, res, adminToken, ensureHuman);
+    if (!humanName) return;
     addSSEClient(res, () => disconnectHuman(humanName));
     connectHuman(humanName);
   }
@@ -927,14 +942,14 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       return true;
     }
 
-    const publicRoute = (publicRoutes as RouteTable)[path];
+    const publicRoute = publicRoutes[path];
     if (publicRoute) {
       if (checkMethod(publicRoute, req, res)) runRoute(publicRoute, req, res);
       return true;
     }
 
     // Join routes (require join token)
-    const joinRoute = (joinRoutes as RouteTable)[path];
+    const joinRoute = joinRoutes[path];
     if (joinRoute) {
       if (!checkMethod(joinRoute, req, res)) return true;
       if (!authenticateBearer(req, joinToken)) {
@@ -946,7 +961,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
 
     // Admin routes (require admin token)
-    const adminRoute = (adminRoutes as RouteTable)[path];
+    const adminRoute = adminRoutes[path];
     if (adminRoute) {
       if (!checkMethod(adminRoute, req, res)) return true;
       if (!authenticateBearer(req, adminToken)) {
@@ -965,7 +980,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
 
     // User-protected routes (require user token)
-    const protectedRoute = (protectedRoutes as RouteTable)[path];
+    const protectedRoute = protectedRoutes[path];
     if (protectedRoute) {
       if (!checkMethod(protectedRoute, req, res)) return true;
       const userName = authenticateRequest(req);
@@ -998,17 +1013,13 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   const idleTimer = setInterval(() => expireIdleSessions(), IDLE_CHECK_INTERVAL_MS);
   idleTimer.unref();
 
-  /** Number of agents (not humans or bridges) currently on the air. */
-  function agentsOnline(): number {
-    return getRegisteredUsers().filter((n) => getUserRole(n) === "agent" && isOnline(n)).length;
-  }
-
-  /** Stop the project's timers and close its dashboard streams (agents: see prepareShutdown). */
-  function dispose(): void {
+  /** Stop the project's timers, end its dashboard streams and close its database (agents: see prepareShutdown). */
+  function close(): void {
     clearInterval(idleTimer);
     for (const timer of staleTimers.values()) clearTimeout(timer);
     staleTimers.clear();
     project.events.closeAllSSEClients();
+    project.db.close();
   }
 
   return {
@@ -1019,8 +1030,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     disconnectHuman,
     expireIdleSessions,
     prepareShutdown,
-    agentsOnline,
-    dispose,
+    close,
   };
 }
 
@@ -1046,42 +1056,21 @@ export interface HubOptions {
   projectsDir?: string | null;
 }
 
-// The hub running in this process, for prepareShutdown and expireIdleSessions
-let activeHub: { apps: Map<string, ProjectApp>; stop: () => void } | null = null;
-
-/**
- * Tell agents and bridges in every project that the hub is going away and end all open polls.
- * "restart": sessions and undelivered messages are kept for the next start (RADIO_RESTART).
- * "stop": everyone is disconnected and sessions are dropped (RADIO_KILLED).
- */
-export function prepareShutdown(mode: "restart" | "stop"): void {
-  if (!activeHub) return;
-  // From now on new requests are dropped (see handleRequest), so agents re-polling right after
-  // their poll ends can't keep the server from closing; they reconnect once the hub is back
-  activeHub.stop();
-  for (const app of activeHub.apps.values()) app.prepareShutdown(mode);
+/** A running hub: its HTTP server plus the operations that span all projects. */
+export interface Hub {
+  server: Server;
+  /**
+   * Tell agents and bridges in every project that the hub is going away, end all polls and live
+   * streams, and drop new requests so the server can close.
+   * "restart": sessions and undelivered messages are kept for the next start (RADIO_RESTART).
+   * "stop": everyone is disconnected and sessions are dropped (RADIO_KILLED).
+   */
+  shutdown(mode: "restart" | "stop"): void;
+  /** Unregister idle agents in every project; returns their names. */
+  expireIdleSessions(now?: number): string[];
+  /** Saved agent launch configs of every project. */
+  agentConfigs(): AgentConfigRow[];
 }
-
-/** Unregister idle agents in every project; returns their names. */
-export function expireIdleSessions(now = Date.now()): string[] {
-  if (!activeHub) return [];
-  return [...activeHub.apps.values()].flatMap((app) => app.expireIdleSessions(now));
-}
-
-/** Saved agent launch configs of every project. */
-export function agentConfigsOfAllProjects(): AgentConfigRow[] {
-  if (!activeHub) return [];
-  return [...activeHub.apps.values()].flatMap((app) => app.project.db.dbListAgentConfigs());
-}
-
-/** Ends every dashboard event stream, the hub-wide one included. */
-export function closeAllEventStreams(): void {
-  if (!activeHub) return;
-  for (const app of activeHub.apps.values()) app.project.events.closeAllSSEClients();
-  hubEvents?.closeAllSSEClients();
-}
-
-let hubEvents: ReturnType<typeof createEventStream<HubWideEvent>> | null = null;
 
 export function createHubServer(
   port: number,
@@ -1089,7 +1078,7 @@ export function createHubServer(
   joinToken: string,
   host = "127.0.0.1",
   options: HubOptions = {},
-): import("node:http").Server {
+): Hub {
   const dbPath = options.dbPath ?? process.env.WALKIE_TALKIE_DB_PATH ?? path.join(process.cwd(), "walkie-talkie.db");
   const projectsDir =
     options.projectsDir !== undefined
@@ -1100,7 +1089,6 @@ export function createHubServer(
 
   const apps = new Map<string, ProjectApp>();
   const events = createEventStream<HubWideEvent>();
-  hubEvents = events;
   // Each hub-wide stream makes its human present in every project (where the name is free)
   const hubPresences = new Set<{ name: string; apps: Set<ProjectApp> }>();
   function attachPresence(presence: { name: string; apps: Set<ProjectApp> }, app: ProjectApp): void {
@@ -1109,12 +1097,6 @@ export function createHubServer(
     presence.apps.add(app);
   }
   let shuttingDown = false;
-  activeHub = {
-    apps,
-    stop: () => {
-      shuttingDown = true;
-    },
-  };
 
   function openProject(name: string, file: string): ProjectApp {
     const app = createProjectApp(createProject(name, file), adminToken, joinToken);
@@ -1150,14 +1132,10 @@ export function createHubServer(
 
   function listProjects() {
     const names = [...apps.keys()].filter((n) => n !== DEFAULT_PROJECT).sort((a, b) => a.localeCompare(b));
-    return [DEFAULT_PROJECT, ...names].map((name) => ({
-      name,
-      default: name === DEFAULT_PROJECT,
-      agentsOnline: apps.get(name)!.agentsOnline(),
-    }));
+    return [DEFAULT_PROJECT, ...names].map((name) => ({ name, default: name === DEFAULT_PROJECT }));
   }
 
-  async function handleProjectCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function handleProjectCreate(req: IncomingMessage, res: ServerResponse, caller?: string): Promise<void> {
     const body = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const invalid = validateProjectName(name);
@@ -1165,67 +1143,58 @@ export function createHubServer(
     if (apps.has(name)) return sendError(res, 409, `Project "${name}" already exists`);
     openProject(name, projectsDir ? projectDbPath(projectsDir, name) : ":memory:");
     events.broadcast({ type: "project_create", name, timestamp: Date.now() });
-    console.log(`[project-create] ${name} by ${adminCaller(req)}`);
+    console.log(`[project-create] ${name} by ${caller}`);
     sendJson(res, 200, { ok: true, project: name });
   }
 
-  async function handleProjectArchive(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function handleProjectArchive(req: IncomingMessage, res: ServerResponse, caller?: string): Promise<void> {
     const body = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
     const name = typeof body.name === "string" ? body.name : "";
     if (name === DEFAULT_PROJECT) return sendError(res, 400, "The default project can't be archived");
     const app = apps.get(name);
     if (!app) return sendError(res, 404, `Project "${name}" not found`);
     apps.delete(name);
+    for (const presence of hubPresences) presence.apps.delete(app);
     app.prepareShutdown("stop");
-    app.dispose();
-    app.project.db.close();
+    app.close();
     const archivedAs = projectsDir ? archiveProjectFiles(projectsDir, name) : null;
     events.broadcast({ type: "project_archive", name, timestamp: Date.now() });
-    console.log(`[project-archive] ${name} by ${adminCaller(req)}${archivedAs ? ` -> ${archivedAs}` : ""}`);
+    console.log(`[project-archive] ${name} by ${caller}${archivedAs ? ` -> ${archivedAs}` : ""}`);
     sendJson(res, 200, { ok: true, project: name, archivedAs });
   }
 
   function handleHubEvents(url: URL, res: ServerResponse) {
-    if (url.searchParams.get("token") !== adminToken) return sendError(res, 401, "Unauthorized");
-    const name = url.searchParams.get("name") || DEFAULT_HUMAN;
-    const error = apps.get(DEFAULT_PROJECT)!.ensureHuman(name);
-    if (error) return sendError(res, error.status, error.error);
+    const name = streamHuman(url, res, adminToken, apps.get(DEFAULT_PROJECT)!.ensureHuman);
+    if (!name) return;
     const presence = { name, apps: new Set<ProjectApp>() };
     for (const app of apps.values()) attachPresence(presence, app);
     hubPresences.add(presence);
     events.addSSEClient(res, () => {
       hubPresences.delete(presence);
-      for (const app of presence.apps) {
-        if (apps.get(app.project.name) === app) app.disconnectHuman(name);
-      }
+      for (const app of presence.apps) app.disconnectHuman(name);
     });
   }
 
-  /** Routes that concern the hub as a whole rather than one project. */
+  /** Routes that concern the hub as a whole rather than one project (admin token). */
+  const hubRoutes: RouteTable = {
+    "/projects": { method: "GET", handler: async (_req, res) => sendJson(res, 200, { projects: listProjects() }) },
+    "/admin-project-create": { method: "POST", handler: handleProjectCreate },
+    "/admin-project-archive": { method: "POST", handler: handleProjectArchive },
+  };
+
   function dispatchHub(req: IncomingMessage, res: ServerResponse, url: URL): boolean {
-    const route = url.pathname;
-    if (route === "/hub-events" && req.method === "GET") {
+    if (url.pathname === "/hub-events" && req.method === "GET") {
       handleHubEvents(url, res);
       return true;
     }
-    const handlers: Record<string, { method: string; run: () => void | Promise<void> }> = {
-      "/projects": { method: "GET", run: () => sendJson(res, 200, { projects: listProjects() }) },
-      "/admin-project-create": { method: "POST", run: () => handleProjectCreate(req, res) },
-      "/admin-project-archive": { method: "POST", run: () => handleProjectArchive(req, res) },
-    };
-    const handler = handlers[route];
-    if (!handler) return false;
-    if (req.method !== handler.method) {
-      sendError(res, 405, "Method not allowed");
-      return true;
-    }
+    const route = hubRoutes[url.pathname];
+    if (!route) return false;
+    if (!checkMethod(route, req, res)) return true;
     if (!authenticateBearer(req, adminToken)) {
       sendError(res, 401, "Admin token required");
       return true;
     }
-    Promise.resolve()
-      .then(handler.run)
-      .catch((e) => sendError(res, 500, (e as Error).message));
+    runRoute(route, req, res, adminCaller(req));
     return true;
   }
 
@@ -1267,16 +1236,24 @@ export function createHubServer(
     throw err;
   });
   server.on("close", () => {
-    for (const app of apps.values()) {
-      app.dispose();
-      app.project.db.close();
-    }
-    events.closeAllSSEClients();
+    for (const app of apps.values()) app.close();
   });
   server.listen(port, host, () => {
     console.log(`Walkie-Talkie Hub listening on http://${host}:${port}`);
   });
-  return server;
+
+  return {
+    server,
+    shutdown(mode) {
+      // From now on new requests are dropped (see handleRequest), so agents re-polling right after
+      // their poll ends can't keep the server from closing; they reconnect once the hub is back
+      shuttingDown = true;
+      for (const app of apps.values()) app.prepareShutdown(mode);
+      events.closeAllSSEClients();
+    },
+    expireIdleSessions: (now = Date.now()) => [...apps.values()].flatMap((app) => app.expireIdleSessions(now)),
+    agentConfigs: () => [...apps.values()].flatMap((app) => app.project.db.dbListAgentConfigs()),
+  };
 }
 
 function sendHtml(res: ServerResponse, html: string): void {

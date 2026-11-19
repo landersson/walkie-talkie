@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
+import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let dir: string;
 let ctx: TestContext | null = null;
@@ -26,10 +26,6 @@ async function register(c: TestContext, prefix: string, name: string): Promise<R
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.joinToken}` },
     body: JSON.stringify({ name }),
   });
-}
-
-async function tokenOf(c: TestContext, prefix: string, name: string): Promise<string> {
-  return ((await (await register(c, prefix, name)).json()) as { token: string }).token;
 }
 
 function send(c: TestContext, prefix: string, token: string, content: string): Promise<Response> {
@@ -84,7 +80,7 @@ describe("projects", () => {
     await admin(c, "/admin-project-create", { name: "alpha" });
     expect((await register(c, "/p/alpha", "Tester")).status).toBe(200);
     expect((await register(c, "", "Tester")).status).toBe(200);
-    const alphaToken = await tokenOf(c, "/p/alpha", "Sender");
+    const alphaToken = await registerUser(c, "Sender", "/p/alpha");
     expect((await send(c, "/p/alpha", alphaToken, "only in alpha")).status).toBe(200);
     expect(await history(c, "/p/alpha")).toContain("only in alpha");
     expect(await history(c, "")).not.toContain("only in alpha");
@@ -108,7 +104,7 @@ describe("projects", () => {
   it("archives a project: agents are disconnected and the database moves to archive/", async () => {
     const c = await start();
     await admin(c, "/admin-project-create", { name: "alpha" });
-    const token = await tokenOf(c, "/p/alpha", "Worker");
+    const token = await registerUser(c, "Worker", "/p/alpha");
     const poll = fetch(`${c.baseUrl}/p/alpha/poll`, { headers: { Authorization: `Bearer ${token}` } });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -128,7 +124,7 @@ describe("projects", () => {
   it("reloads projects and their history after a restart", async () => {
     let c = await start();
     await admin(c, "/admin-project-create", { name: "alpha" });
-    const token = await tokenOf(c, "/p/alpha", "Writer");
+    const token = await registerUser(c, "Writer", "/p/alpha");
     await send(c, "/p/alpha", token, "kept");
     await stopTestServer(c);
     ctx = null;
@@ -147,7 +143,7 @@ describe("projects", () => {
       signal: controller.signal,
     });
     const reader = stream.body!.getReader();
-    const token = await tokenOf(c, "/p/alpha", "Chatty");
+    const token = await registerUser(c, "Chatty", "/p/alpha");
     await send(c, "/p/alpha", token, "hello");
 
     let text = "";

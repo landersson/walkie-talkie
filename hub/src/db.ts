@@ -417,7 +417,6 @@ export function openProjectDB(dbPath: string) {
   }
 
   return {
-    path: dbPath,
     close,
     dbCreateChannel,
     dbSetChannelDescription,

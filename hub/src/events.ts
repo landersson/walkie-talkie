@@ -77,9 +77,11 @@ export function createEventStream<E = HubEvent>() {
   }
 
   function broadcast(event: E): void {
-    const data = JSON.stringify(event);
-    for (const client of clients) {
-      client.write(`data: ${data}\n\n`);
+    if (clients.size > 0) {
+      const data = JSON.stringify(event);
+      for (const client of clients) {
+        client.write(`data: ${data}\n\n`);
+      }
     }
     for (const listener of listeners) listener(event);
   }

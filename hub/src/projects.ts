@@ -4,15 +4,15 @@ import path from "node:path";
 /** The project that unprefixed routes and the original database belong to. */
 export const DEFAULT_PROJECT = "default";
 
-const PROJECT_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
+/** Project names and the names humans log in with. */
+export const NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
+export const NAME_RULES = "use letters, digits, - or _, max 32";
 const RESERVED_PROJECT_NAMES = new Set(["archive", "p"]);
 const ARCHIVE_DIR = "archive";
 
 /** Returns why `name` can't be a project name, or null if it can. */
 export function validateProjectName(name: string): string | null {
-  if (!PROJECT_NAME_RE.test(name)) {
-    return `Invalid project name "${name}" (use letters, digits, - or _, max 32)`;
-  }
+  if (!NAME_RE.test(name)) return `Invalid project name "${name}" (${NAME_RULES})`;
   if (RESERVED_PROJECT_NAMES.has(name)) return `"${name}" is reserved`;
   return null;
 }

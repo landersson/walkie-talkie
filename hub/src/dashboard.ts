@@ -1,5 +1,12 @@
-import { FAVICON_HREF } from "./icon.js";
 import { renderMarkdown } from "./markdown.js";
+import {
+  DIALOG_CSS,
+  FAVICON_DOT_HREF,
+  FAVICON_HREF,
+  LOGIN_DIALOG_HTML,
+  LOGIN_SCRIPT,
+  THEME_CSS,
+} from "./page-common.js";
 
 export function getDashboardHTML(): string {
   return `<!DOCTYPE html>
@@ -12,31 +19,7 @@ export function getDashboardHTML(): string {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg-base: #09090b;
-    --bg-raised: #111114;
-    --bg-surface: #18181b;
-    --bg-hover: #1f1f23;
-    --border: rgba(255,255,255,0.06);
-    --border-subtle: rgba(255,255,255,0.04);
-    --text-primary: #ececef;
-    --text-secondary: #71717a;
-    --text-tertiary: #52525b;
-    --accent: #818cf8;
-    --accent-soft: rgba(129,140,248,0.12);
-    --green: #34d399;
-    --green-soft: rgba(52,211,153,0.12);
-    --green-border: rgba(52,211,153,0.2);
-    --red: #f87171;
-    --red-soft: rgba(248,113,113,0.1);
-    --red-border: rgba(248,113,113,0.2);
-    --yellow: #fbbf24;
-    --yellow-soft: rgba(251,191,36,0.12);
-    --radius: 10px;
-    --font: 'DM Sans', -apple-system, sans-serif;
-    --mono: 'Geist Mono', ui-monospace, monospace;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+${THEME_CSS}
   body {
     font-family: var(--font);
     background: var(--bg-base);
@@ -506,105 +489,7 @@ export function getDashboardHTML(): string {
     background: var(--red-soft) !important;
   }
 
-  /* Agent dialog */
-  .dialog-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-  .dialog {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    width: 420px;
-    max-width: 90vw;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .dialog h2 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-  }
-  .dialog label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .dialog input, .dialog textarea {
-    font-family: var(--mono);
-    font-size: 13px;
-    padding: 8px 10px;
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
-    transition: border-color 0.15s ease;
-  }
-  .dialog input:focus, .dialog textarea:focus {
-    border-color: var(--accent);
-  }
-  .dialog input::placeholder, .dialog textarea::placeholder {
-    color: var(--text-tertiary);
-  }
-  .dialog textarea {
-    resize: vertical;
-    min-height: 60px;
-  }
-  .dialog .checkbox-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-secondary);
-  }
-  .dialog .checkbox-row input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent);
-  }
-  .dialog .dialog-buttons {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-  .dialog .dialog-buttons button {
-    font-family: var(--font);
-    font-size: 13px;
-    font-weight: 500;
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-  .dialog .btn-cancel {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-  }
-  .dialog .btn-cancel:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-  .dialog .btn-save {
-    background: var(--accent);
-    color: #fff;
-    border: 1px solid var(--accent);
-  }
-  .dialog .btn-save:hover {
-    opacity: 0.9;
-  }
+${DIALOG_CSS}
 
   /* Messages */
   .messages-wrap {
@@ -1203,22 +1088,7 @@ export function getDashboardHTML(): string {
     <img alt="">
     <span class="hint">Click or Esc to close &middot; Shift+click an image to open it in a new tab</span>
   </div>
-  <div class="dialog-overlay" id="login-dialog" style="display:none">
-    <div class="dialog">
-      <h2>Log in</h2>
-      <label id="login-token-row">Admin token
-        <input type="password" id="login-token" placeholder="WALKIE_TALKIE_ADMIN_TOKEN" autocomplete="current-password">
-      </label>
-      <label id="login-name-row">Your name
-        <input type="text" id="login-name" placeholder="e.g. alice" maxlength="32" autocomplete="nickname">
-      </label>
-      <span id="login-error" style="color:var(--red);font-size:11px;display:none"></span>
-      <div class="dialog-buttons">
-        <button class="btn-cancel" id="login-as-operator">Continue as operator</button>
-        <button class="btn-save" id="login-submit">Log in</button>
-      </div>
-    </div>
-  </div>
+${LOGIN_DIALOG_HTML}
   <div class="dialog-overlay" id="channel-dialog" style="display:none">
     <div class="dialog">
       <h2 id="channel-dialog-title">New Channel</h2>
@@ -1257,7 +1127,7 @@ export function getDashboardHTML(): string {
     </div>
   </div>
   <script>
-    const TOKEN_STORAGE_KEY = "walkie-talkie-admin-token";
+${LOGIN_SCRIPT}
     let ADMIN_TOKEN = "";
     let adminHeaders = {};
     const messagesEl = document.getElementById("messages");
@@ -1291,17 +1161,14 @@ export function getDashboardHTML(): string {
     // Tab icon: a green dot while any channel has unread messages, or while new
     // messages arrived in the open channel with the tab in the background
     const faviconEl = document.querySelector('link[rel="icon"]');
-    const plainIcon = faviconEl.getAttribute("href");
-    const dotIcon = plainIcon.replace(/%3C%2Fsvg%3E$/,
-      encodeURIComponent("<circle cx='25' cy='7' r='6.5' fill='#22c55e' stroke='#fff' stroke-width='2'/></svg>"));
+    const plainIcon = "${FAVICON_HREF}";
+    const dotIcon = "${FAVICON_DOT_HREF}";
     let unseenWhileHidden = false;
     let faviconDot = false;
 
     // Inside the project tabs page (/), this dashboard shows one project. The tabs page does the
     // login and tells the dashboard whether its tab is the one on screen.
     const EMBEDDED = window.parent !== window && new URLSearchParams(location.search).has("embedded");
-    const pathParts = location.pathname.split("/"); // "/p/<project>/" -> ["", "p", project, ""]
-    const PROJECT = pathParts[1] === "p" && pathParts[2] ? decodeURIComponent(pathParts[2]) : "default";
     let paneActive = true;
     if (EMBEDDED) document.body.classList.add("embedded");
     window.addEventListener("message", (e) => {
@@ -1318,7 +1185,7 @@ export function getDashboardHTML(): string {
       const hasNew = unseenWhileHidden || Object.values(unreadCounts).some(n => n > 0);
       if (EMBEDDED) {
         const unread = Object.values(unreadCounts).reduce((a, n) => a + n, 0);
-        parent.postMessage({ type: "walkie-unread", project: PROJECT, unread, dot: hasNew }, location.origin);
+        parent.postMessage({ type: "walkie-unread", unread, dot: hasNew }, location.origin);
       }
       if (hasNew === faviconDot) return;
       faviconDot = hasNew;
@@ -1588,9 +1455,6 @@ export function getDashboardHTML(): string {
       return div;
     }
 
-    function escapeHtml(text) {
-      return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-    }
 
     function messageHtml(m) {
       return '<span class="time">' + formatTime(m.timestamp) + '</span>' +
@@ -2501,108 +2365,10 @@ export function getDashboardHTML(): string {
       };
     }
 
-    // Login: the admin token is never embedded in the page, and each person picks a name.
-    // Both are remembered, so the dialog only asks for what is missing. The name is kept per tab
-    // (sessionStorage) so different tabs can be different people; the last name used
-    // (localStorage) is the default for new tabs.
-    const USER_STORAGE_KEY = "walkie-talkie-user-name";
-    const SWITCH_USER_KEY = "walkie-talkie-switch-user";
-    const loginDialogEl = document.getElementById("login-dialog");
-    const loginInputEl = document.getElementById("login-token");
-    const loginNameEl = document.getElementById("login-name");
-    const loginErrorEl = document.getElementById("login-error");
-    const loginOperatorBtnEl = document.getElementById("login-as-operator");
-    let loginNeedsToken = false;
-    let loginNeedsName = false;
-
-    function readStored(key, perTab) {
-      try { return (perTab ? sessionStorage : localStorage).getItem(key) || ""; } catch { return ""; }
+    function onLoggedIn() {
+      startDashboard();
     }
-
-    function store(key, value, perTab) {
-      try {
-        const area = perTab ? sessionStorage : localStorage;
-        if (value) area.setItem(key, value);
-        else area.removeItem(key);
-      } catch {}
-    }
-
-    function rememberedName() {
-      if (readStored(SWITCH_USER_KEY, true)) return "";
-      return readStored(USER_STORAGE_KEY, true) || readStored(USER_STORAGE_KEY);
-    }
-
-    // Resolves to null on success, or { field, error } describing what to ask for again
-    function tryLogin(token, name) {
-      return fetch("admin-login", { method: "POST", headers: { "Authorization": "Bearer " + token, "X-Walkie-User": name } })
-        .then(r => r.json().catch(() => ({})).then(data => {
-          if (r.status === 401) return { field: "token", error: "Invalid admin token" };
-          if (!r.ok) return { field: "name", error: data.error || "That name can't be used" };
-          ADMIN_TOKEN = token;
-          MY_NAME = name;
-          adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-Walkie-User": name };
-          store(TOKEN_STORAGE_KEY, token);
-          store(USER_STORAGE_KEY, name);
-          store(USER_STORAGE_KEY, name, true);
-          store(SWITCH_USER_KEY, "", true);
-          document.getElementById("whoami").innerHTML = "Signed in as <strong>" + name + "</strong>";
-          loginDialogEl.style.display = "none";
-          startDashboard();
-          return null;
-        }));
-    }
-
-    function showLogin(error) {
-      document.getElementById("login-token-row").style.display = loginNeedsToken ? "" : "none";
-      document.getElementById("login-name-row").style.display = loginNeedsName ? "" : "none";
-      loginOperatorBtnEl.style.display = loginNeedsName ? "" : "none";
-      loginErrorEl.textContent = error || "";
-      loginErrorEl.style.display = error ? "" : "none";
-      loginDialogEl.style.display = "flex";
-      (loginNeedsToken ? loginInputEl : loginNameEl).focus();
-    }
-
-    function submitLogin(asName) {
-      const token = loginNeedsToken ? loginInputEl.value.trim() : readStored(TOKEN_STORAGE_KEY);
-      const name = asName || (loginNeedsName ? loginNameEl.value.trim() : rememberedName());
-      if (!token || !name) return;
-      tryLogin(token, name)
-        .then(failure => {
-          if (!failure) return;
-          if (failure.field === "token") { store(TOKEN_STORAGE_KEY, ""); loginNeedsToken = true; }
-          else {
-            store(USER_STORAGE_KEY, "", true);
-            if (readStored(USER_STORAGE_KEY) === name) store(USER_STORAGE_KEY, "");
-            loginNeedsName = true;
-          }
-          showLogin(failure.error);
-        })
-        .catch(() => showLogin("Could not reach the Hub"));
-    }
-
-    document.getElementById("login-submit").onclick = () => submitLogin();
-    loginOperatorBtnEl.onclick = () => submitLogin("operator");
-    loginInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
-    loginNameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
-
-    // Only this tab switches; other tabs keep their names
-    document.getElementById("switch-user-btn").onclick = () => {
-      store(SWITCH_USER_KEY, "1", true);
-      store(USER_STORAGE_KEY, "", true);
-      location.reload();
-    };
-
-    if (EMBEDDED) {
-      const embeddedName = new URLSearchParams(location.search).get("name");
-      if (embeddedName) {
-        store(USER_STORAGE_KEY, embeddedName, true);
-        store(SWITCH_USER_KEY, "", true);
-      }
-    }
-    loginNeedsToken = !readStored(TOKEN_STORAGE_KEY);
-    loginNeedsName = !rememberedName();
-    if (loginNeedsToken || loginNeedsName) showLogin();
-    else submitLogin();
+    beginLogin();
   </script>
 </body>
 </html>`;

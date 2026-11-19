@@ -1,4 +1,12 @@
-import { FAVICON_HREF } from "./icon.js";
+import {
+  DIALOG_CSS,
+  FAVICON_DOT_HREF,
+  FAVICON_HREF,
+  LOGIN_DIALOG_HTML,
+  LOGIN_SCRIPT,
+  THEME_CSS,
+} from "./page-common.js";
+import { DEFAULT_PROJECT } from "./projects.js";
 
 /**
  * The page at "/": one tab per project, each showing that project's dashboard (/p/<name>/) in
@@ -16,22 +24,7 @@ export function getShellHTML(): string {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg-base: #09090b;
-    --bg-raised: #111114;
-    --bg-surface: #18181b;
-    --bg-hover: #1f1f23;
-    --border: rgba(255,255,255,0.06);
-    --text-primary: #ececef;
-    --text-secondary: #71717a;
-    --text-tertiary: #52525b;
-    --accent: #818cf8;
-    --green: #34d399;
-    --red: #f87171;
-    --font: 'DM Sans', -apple-system, sans-serif;
-    --mono: 'Geist Mono', ui-monospace, monospace;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+${THEME_CSS}
   html, body { height: 100%; }
   body {
     font-family: var(--font);
@@ -128,46 +121,10 @@ export function getShellHTML(): string {
   #frames { flex: 1; position: relative; min-height: 0; }
   #frames iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: none; background: var(--bg-base); }
   #frames iframe.active { display: block; }
-  .dialog-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-    display: flex; align-items: center; justify-content: center; z-index: 100;
-  }
-  .dialog {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    width: 420px;
-    max-width: 90vw;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .dialog h2 { font-size: 16px; font-weight: 600; }
+${DIALOG_CSS}
   .dialog p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
   .dialog p code { font-family: var(--mono); font-size: 12px; color: var(--text-primary); word-break: break-all; }
-  .dialog label { font-size: 12px; font-weight: 500; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px; }
-  .dialog input {
-    font-family: var(--mono);
-    font-size: 13px;
-    padding: 8px 10px;
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
-  }
-  .dialog input:focus { border-color: var(--accent); }
-  .dialog .error { color: var(--red); font-size: 11px; }
-  .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
-  .dialog-buttons button {
-    font-family: var(--font); font-size: 13px; font-weight: 500;
-    padding: 8px 16px; border-radius: 8px; cursor: pointer;
-  }
-  .btn-cancel { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
-  .btn-cancel:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .btn-save { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
-  .btn-danger { background: var(--red); color: #fff; border: 1px solid var(--red); }
+  .dialog .btn-danger { background: var(--red); color: #fff; border: 1px solid var(--red); }
 </style>
 </head>
 <body>
@@ -187,22 +144,7 @@ export function getShellHTML(): string {
   </header>
   <div id="frames"></div>
 
-  <div class="dialog-overlay" id="login-dialog" style="display:none">
-    <div class="dialog">
-      <h2>Log in</h2>
-      <label id="login-token-row">Admin token
-        <input type="password" id="login-token" placeholder="WALKIE_TALKIE_ADMIN_TOKEN" autocomplete="current-password">
-      </label>
-      <label id="login-name-row">Your name
-        <input type="text" id="login-name" placeholder="e.g. alice" maxlength="32" autocomplete="nickname">
-      </label>
-      <span id="login-error" class="error" style="display:none"></span>
-      <div class="dialog-buttons">
-        <button class="btn-cancel" id="login-as-operator">Continue as operator</button>
-        <button class="btn-save" id="login-submit">Log in</button>
-      </div>
-    </div>
-  </div>
+${LOGIN_DIALOG_HTML}
 
   <div class="dialog-overlay" id="project-dialog" style="display:none">
     <div class="dialog">
@@ -234,10 +176,10 @@ export function getShellHTML(): string {
   </div>
 
   <script>
-    // Shared with the per-project dashboards, which read the login from the same storage
-    const TOKEN_STORAGE_KEY = "walkie-talkie-admin-token";
-    const USER_STORAGE_KEY = "walkie-talkie-user-name";
-    const SWITCH_USER_KEY = "walkie-talkie-switch-user";
+    // The dashboards in the tabs read the login from the same storage, so they don't ask again
+${LOGIN_SCRIPT}
+
+    const DEFAULT_PROJECT = "${DEFAULT_PROJECT}";
     const ACTIVE_PROJECT_KEY = "walkie-talkie-active-project";
     // Browsers allow 6 connections per server and each open dashboard keeps one for its live
     // stream, so only this many project dashboards stay loaded (most recently used first)
@@ -257,31 +199,14 @@ export function getShellHTML(): string {
     const tabsEl = document.getElementById("tabs");
     const framesEl = document.getElementById("frames");
 
-    function readStored(key, perTab) {
-      try { return (perTab ? sessionStorage : localStorage).getItem(key) || ""; } catch { return ""; }
-    }
-    function store(key, value, perTab) {
-      try {
-        const area = perTab ? sessionStorage : localStorage;
-        if (value) area.setItem(key, value);
-        else area.removeItem(key);
-      } catch {}
-    }
-    function esc(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-    }
     function projectBase(name) {
       return "/p/" + encodeURIComponent(name) + "/";
-    }
-    function sortProjects() {
-      projects.sort((a, b) => (a.default ? -1 : b.default ? 1 : a.name.localeCompare(b.name)));
     }
 
     // --- Tab icon: a green dot while any project has unread messages ---
     const faviconEl = document.querySelector('link[rel="icon"]');
-    const plainIcon = faviconEl.getAttribute("href");
-    const dotIcon = plainIcon.replace(/%3C%2Fsvg%3E$/,
-      encodeURIComponent("<circle cx='25' cy='7' r='6.5' fill='#22c55e' stroke='#fff' stroke-width='2'/></svg>"));
+    const plainIcon = "${FAVICON_HREF}";
+    const dotIcon = "${FAVICON_DOT_HREF}";
     function updateFavicon() {
       const hasNew = [...unread.values()].some((n) => n > 0) || [...dots.values()].some(Boolean);
       faviconEl.setAttribute("href", hasNew ? dotIcon : plainIcon);
@@ -298,7 +223,7 @@ export function getShellHTML(): string {
           ? "Default project (agents with a plain HUB_URL)"
           : "Agents join with HUB_URL=" + location.origin + projectBase(p.name).slice(0, -1);
         const count = unread.get(p.name) || 0;
-        tab.innerHTML = '<span class="tab-name">' + esc(p.name) + "</span>" +
+        tab.innerHTML = '<span class="tab-name">' + escapeHtml(p.name) + "</span>" +
           (count > 0 ? '<span class="badge">' + (count > 99 ? "99+" : count) + "</span>" : "") +
           (p.default ? "" : '<button class="archive-btn" title="Archive this project">&times;</button>');
         tab.onclick = (e) => {
@@ -318,18 +243,18 @@ export function getShellHTML(): string {
     }
 
     function showProject(name) {
-      if (!projects.some((p) => p.name === name)) name = "default";
+      if (!projects.some((p) => p.name === name)) name = DEFAULT_PROJECT;
       const previous = activeProject;
       activeProject = name;
       store(ACTIVE_PROJECT_KEY, name);
-      const hash = name === "default" ? "" : "#" + encodeURIComponent(name);
+      const hash = name === DEFAULT_PROJECT ? "" : "#" + encodeURIComponent(name);
       if (location.hash !== hash) history.replaceState(null, "", "/" + hash);
-      document.title = name === "default" ? "Walkie-Talkie" : name + " · Walkie-Talkie";
+      document.title = name === DEFAULT_PROJECT ? "Walkie-Talkie" : name + " · Walkie-Talkie";
 
       let frame = frames.get(name);
       if (!frame) {
         frame = document.createElement("iframe");
-        frame.src = projectBase(name) + "?embedded=1&name=" + encodeURIComponent(MY_NAME);
+        frame.src = projectBase(name) + "?embedded=1";
         frame.title = name;
         frames.set(name, frame);
         framesEl.appendChild(frame);
@@ -345,14 +270,16 @@ export function getShellHTML(): string {
       renderTabs();
     }
 
+    function dropFrame(name) {
+      const frame = frames.get(name);
+      if (frame) frame.remove();
+      frames.delete(name);
+      dots.delete(name);
+    }
+
     // Drop a project's dashboard; its badge is then kept up to date from the hub
     function unloadProject(name) {
-      const frame = frames.get(name);
-      if (frame) {
-        frame.remove();
-        frames.delete(name);
-      }
-      dots.delete(name);
+      dropFrame(name);
       refreshUnread(name);
     }
 
@@ -376,8 +303,8 @@ export function getShellHTML(): string {
     // Loaded dashboards report their unread count and whether they want the tab icon dot
     window.addEventListener("message", (e) => {
       if (e.origin !== location.origin || !e.data || e.data.type !== "walkie-unread") return;
-      const name = e.data.project;
-      if (!frames.has(name)) return;
+      const name = [...frames].find(([, f]) => f.contentWindow === e.source)?.[0];
+      if (!name) return;
       unread.set(name, e.data.unread || 0);
       dots.set(name, !!e.data.dot);
       renderTabs();
@@ -394,14 +321,11 @@ export function getShellHTML(): string {
 
     function removeProject(name) {
       projects = projects.filter((p) => p.name !== name);
-      const frame = frames.get(name);
-      if (frame) frame.remove();
-      frames.delete(name);
+      dropFrame(name);
       unread.delete(name);
-      dots.delete(name);
       const i = lastUsed.indexOf(name);
       if (i >= 0) lastUsed.splice(i, 1);
-      if (activeProject === name) showProject("default");
+      if (activeProject === name) showProject(DEFAULT_PROJECT);
       else renderTabs();
     }
 
@@ -413,11 +337,7 @@ export function getShellHTML(): string {
         let ev;
         try { ev = JSON.parse(msg.data); } catch { return; }
         if (ev.type === "project_create") {
-          if (!projects.some((p) => p.name === ev.name)) {
-            projects.push({ name: ev.name, default: false });
-            sortProjects();
-            renderTabs();
-          }
+          if (!projects.some((p) => p.name === ev.name)) loadProjects().then(renderTabs).catch(() => {});
         } else if (ev.type === "project_archive") {
           removeProject(ev.name);
         } else if (ev.type === "activity" || (ev.type === "read" && ev.userName === MY_NAME)) {
@@ -428,7 +348,7 @@ export function getShellHTML(): string {
       es.onopen = () => {
         if (!opened) { opened = true; return; }
         loadProjects().then(() => {
-          if (!projects.some((p) => p.name === activeProject)) showProject("default");
+          if (!projects.some((p) => p.name === activeProject)) showProject(DEFAULT_PROJECT);
           else renderTabs();
         }).catch(() => {});
       };
@@ -463,11 +383,7 @@ export function getShellHTML(): string {
             return;
           }
           projectDialogEl.style.display = "none";
-          if (!projects.some((p) => p.name === name)) {
-            projects.push({ name, default: false });
-            sortProjects();
-          }
-          showProject(name);
+          return loadProjects().then(() => showProject(name));
         })
         .catch(() => {
           projectErrorEl.textContent = "Could not reach the Hub";
@@ -510,98 +426,22 @@ export function getShellHTML(): string {
         });
     };
 
-    // --- Login (same storage as the dashboards, so the tabs inside don't ask again) ---
-    const loginDialogEl = document.getElementById("login-dialog");
-    const loginTokenEl = document.getElementById("login-token");
-    const loginNameEl = document.getElementById("login-name");
-    const loginErrorEl = document.getElementById("login-error");
-    const loginOperatorBtnEl = document.getElementById("login-as-operator");
-    let loginNeedsToken = false;
-    let loginNeedsName = false;
-
-    function rememberedName() {
-      if (readStored(SWITCH_USER_KEY, true)) return "";
-      return readStored(USER_STORAGE_KEY, true) || readStored(USER_STORAGE_KEY);
-    }
-
-    function start() {
+    function onLoggedIn() {
       loadProjects()
         .then(() => {
-          const wanted = decodeURIComponent(location.hash.slice(1)) || readStored(ACTIVE_PROJECT_KEY) || "default";
+          const wanted = decodeURIComponent(location.hash.slice(1)) || readStored(ACTIVE_PROJECT_KEY) || DEFAULT_PROJECT;
           showProject(wanted);
           connectHubEvents();
         })
         .catch(() => showLogin("Could not load the projects"));
     }
 
-    function tryLogin(token, name) {
-      return fetch("/admin-login", { method: "POST", headers: { "Authorization": "Bearer " + token, "X-Walkie-User": name } })
-        .then((r) => r.json().catch(() => ({})).then((data) => {
-          if (r.status === 401) return { field: "token", error: "Invalid admin token" };
-          if (!r.ok) return { field: "name", error: data.error || "That name can't be used" };
-          ADMIN_TOKEN = token;
-          MY_NAME = name;
-          adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-Walkie-User": name };
-          store(TOKEN_STORAGE_KEY, token);
-          store(USER_STORAGE_KEY, name);
-          store(USER_STORAGE_KEY, name, true);
-          store(SWITCH_USER_KEY, "", true);
-          document.getElementById("whoami").innerHTML = "Signed in as <strong>" + esc(name) + "</strong>";
-          loginDialogEl.style.display = "none";
-          start();
-          return null;
-        }));
-    }
-
-    function showLogin(error) {
-      document.getElementById("login-token-row").style.display = loginNeedsToken ? "" : "none";
-      document.getElementById("login-name-row").style.display = loginNeedsName ? "" : "none";
-      loginOperatorBtnEl.style.display = loginNeedsName ? "" : "none";
-      loginErrorEl.textContent = error || "";
-      loginErrorEl.style.display = error ? "" : "none";
-      loginDialogEl.style.display = "flex";
-      (loginNeedsToken ? loginTokenEl : loginNameEl).focus();
-    }
-
-    function submitLogin(asName) {
-      const token = loginNeedsToken ? loginTokenEl.value.trim() : readStored(TOKEN_STORAGE_KEY);
-      const name = asName || (loginNeedsName ? loginNameEl.value.trim() : rememberedName());
-      if (!token || !name) return;
-      tryLogin(token, name)
-        .then((failure) => {
-          if (!failure) return;
-          if (failure.field === "token") { store(TOKEN_STORAGE_KEY, ""); loginNeedsToken = true; }
-          else {
-            store(USER_STORAGE_KEY, "", true);
-            if (readStored(USER_STORAGE_KEY) === name) store(USER_STORAGE_KEY, "");
-            loginNeedsName = true;
-          }
-          showLogin(failure.error);
-        })
-        .catch(() => showLogin("Could not reach the Hub"));
-    }
-
-    document.getElementById("login-submit").onclick = () => submitLogin();
-    loginOperatorBtnEl.onclick = () => submitLogin("operator");
-    loginTokenEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
-    loginNameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
-
-    // Only this browser tab switches; other tabs keep their names
-    document.getElementById("switch-user-btn").onclick = () => {
-      store(SWITCH_USER_KEY, "1", true);
-      store(USER_STORAGE_KEY, "", true);
-      location.reload();
-    };
-
     window.addEventListener("hashchange", () => {
       const name = decodeURIComponent(location.hash.slice(1));
       if (MY_NAME && name && name !== activeProject) showProject(name);
     });
 
-    loginNeedsToken = !readStored(TOKEN_STORAGE_KEY);
-    loginNeedsName = !rememberedName();
-    if (loginNeedsToken || loginNeedsName) showLogin();
-    else submitLogin();
+    beginLogin();
   </script>
 </body>
 </html>`;

@@ -1,30 +1,24 @@
 import fs from "node:fs";
-import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createHubServer, expireIdleSessions, prepareShutdown } from "../server.js";
+import { startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
-const JOIN = "join";
-const ADMIN = "admin";
+let JOIN = "";
 let dir: string;
-let server: Server | null = null;
+let ctx: TestContext | null = null;
 
 // Simulates a hub process start: fresh in-memory state, same database file
 async function startHub(): Promise<string> {
-  server = createHubServer(0, ADMIN, JOIN, "127.0.0.1", {
-    dbPath: path.join(dir, "hub.db"),
-    projectsDir: path.join(dir, "projects"),
-  });
-  await new Promise<void>((resolve) => server!.on("listening", resolve));
-  const addr = server.address();
-  return `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+  ctx = await startTestServer({ dbPath: path.join(dir, "hub.db"), projectsDir: path.join(dir, "projects") });
+  JOIN = ctx.joinToken;
+  return ctx.baseUrl;
 }
 
 async function stopHub(mode: "restart" | "stop"): Promise<void> {
-  prepareShutdown(mode);
-  await new Promise<void>((resolve) => server!.close(() => resolve()));
-  server = null;
+  ctx!.hub.shutdown(mode);
+  await stopTestServer(ctx!);
+  ctx = null;
 }
 
 async function register(base: string, name: string): Promise<string> {
@@ -49,8 +43,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
-  server = null;
+  if (ctx) await stopTestServer(ctx);
+  ctx = null;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -115,11 +109,11 @@ describe("hub restart", () => {
     });
     expect(((await res.json()) as { error: string }).error).toMatch(/already registered, but not connected/);
     expect((await call(base, bob, "/send", { to: "@alice", content: "while you were busy" })).status).toBe(200);
-    expect(expireIdleSessions(Date.now() + 23 * 3_600_000)).toEqual([]);
+    expect(ctx!.hub.expireIdleSessions(Date.now() + 23 * 3_600_000)).toEqual([]);
 
     const body = (await (await call(base, alice, "/poll?timeout=1")).json()) as { messages: { content: string }[] };
     expect(body.messages.map((m) => m.content)).toEqual(["while you were busy"]);
-    expect(expireIdleSessions(Date.now() + 25 * 3_600_000).sort()).toEqual(["alice", "bob"]);
+    expect(ctx!.hub.expireIdleSessions(Date.now() + 25 * 3_600_000).sort()).toEqual(["alice", "bob"]);
   });
 
   it("forgets unregistered agents", async () => {
@@ -136,7 +130,7 @@ describe("shutdown and idle sessions", () => {
   it("drops new requests once shutdown has started, so the server can close", async () => {
     const base = await startHub();
     const alice = await register(base, "alice");
-    prepareShutdown("restart");
+    ctx!.hub.shutdown("restart");
     await expect(call(base, alice, "/poll?timeout=10")).rejects.toThrow();
   });
 
@@ -146,8 +140,8 @@ describe("shutdown and idle sessions", () => {
     const bob = await register(base, "bob");
     const waiting = call(base, bob, "/poll?timeout=5");
     await new Promise((r) => setTimeout(r, 50));
-    expect(expireIdleSessions(Date.now() + 23 * 3_600_000)).toEqual([]);
-    expect(expireIdleSessions(Date.now() + 25 * 3_600_000)).toEqual(["alice"]);
+    expect(ctx!.hub.expireIdleSessions(Date.now() + 23 * 3_600_000)).toEqual([]);
+    expect(ctx!.hub.expireIdleSessions(Date.now() + 25 * 3_600_000)).toEqual(["alice"]);
     expect((await call(base, alice, "/poll?timeout=1")).status).toBe(401);
     await stopHub("restart");
     await waiting;

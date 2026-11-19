@@ -68,11 +68,6 @@ export function createAuth(db: ProjectDB, channels: Channels) {
     return users.has(name);
   }
 
-  function resetAuthState(): void {
-    users.clear();
-    tokenToName.clear();
-  }
-
   return {
     getUserToken,
     registerUser,
@@ -83,7 +78,6 @@ export function createAuth(db: ProjectDB, channels: Channels) {
     getUserRole,
     getUsersByRole,
     isUserRegistered,
-    resetAuthState,
   };
 }
 

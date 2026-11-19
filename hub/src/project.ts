@@ -20,11 +20,9 @@ export function createProject(name: string, dbPath: string): Project {
   const db = openProjectDB(dbPath);
   const channels = createChannels(db);
   const auth = createAuth(db, channels);
-  // Polls drain queues and the router delivers to polls, so the router is bound late
-  let router: Router | undefined;
-  const polling = createPolling((userName) => router!.drainQueue(userName));
-  router = createRouter(db, auth, channels, polling);
+  // Polls drain the router's queues; the router exists by the time the first poll arrives
+  const polling = createPolling((userName) => router.drainQueue(userName));
+  const router = createRouter(db, auth, channels, polling);
   const events = createEventStream();
-  channels.initGeneralChannel();
   return { name, db, auth, channels, polling, router, events };
 }
