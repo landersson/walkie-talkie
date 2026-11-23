@@ -26,6 +26,6 @@ export function createProject(name: string, dbPath: string): Project {
   const polling = createPolling((userName) => router.drainQueue(userName));
   const router = createRouter(db, auth, channels, polling);
   const events = createEventStream();
-  const files = createFileStore(db, filesDirFor(dbPath), { temporary: dbPath === ":memory:" });
+  const files = createFileStore(db, filesDirFor(dbPath, name), { temporary: dbPath === ":memory:" });
   return { name, db, auth, channels, polling, router, events, files };
 }

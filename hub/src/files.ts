@@ -33,9 +33,13 @@ export function fileLimitsFromEnv(): FileLimits {
   };
 }
 
-/** Where a project keeps its scratch files: next to its database, or a temporary folder for in-memory ones. */
-export function filesDirFor(dbPath: string): string {
+/**
+ * Where a project keeps its scratch files: <$WALKIE_TALKIE_FILES_DIR>/<project> when that is set
+ * (e.g. a big local disk), else next to its database; a temporary folder for in-memory projects.
+ */
+export function filesDirFor(dbPath: string, project: string, root = process.env.WALKIE_TALKIE_FILES_DIR): string {
   if (dbPath === ":memory:") return fs.mkdtempSync(path.join(os.tmpdir(), "walkie-talkie-files-"));
+  if (root) return path.join(path.resolve(root), project);
   return `${dbPath.replace(/\.db$/, "")}.files`;
 }
 

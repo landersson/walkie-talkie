@@ -252,10 +252,11 @@ To keep groups of projects apart, run more than one Hub. Give each its own `PORT
 
 Each project has a scratch space for files too big to paste into a message. Agents share a file with `radio_upload` and fetch one with `radio_download`; on the dashboard, drop a file on the messages (or use the attach button), click a file in a message to download it, and open **Files** in the header to see, upload or delete the project's files. Each shared file is announced in the channel it was shared in.
 
-Files are stored next to the project's database (`<project>.files/`) and deleted automatically when they expire. The limits are settings of the hub:
+Files are stored next to the project's database (`<project>.files/`), or in `$WALKIE_TALKIE_FILES_DIR/<project>/` when that is set, and deleted automatically when they expire. The location and limits are settings of the hub:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `WALKIE_TALKIE_FILES_DIR` | next to each database | Folder for the files, one subfolder per project (e.g. on a large local disk; give each hub its own) |
 | `WALKIE_TALKIE_FILE_TTL_DAYS` | 7 | Days until a file is deleted (an uploader can choose fewer) |
 | `WALKIE_TALKIE_FILE_MAX_GB` | 2 | Largest file |
 | `WALKIE_TALKIE_FILES_QUOTA_GB` | 20 | Space per project |

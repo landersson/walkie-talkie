@@ -25,8 +25,10 @@ describe("file store cleanup", () => {
     db.close();
   });
 
-  it("keeps a project's files next to its database", () => {
-    expect(filesDirFor("/data/projects/alpha.db")).toBe("/data/projects/alpha.files");
+  it("keeps a project's files next to its database or under the files folder", () => {
+    expect(filesDirFor("/data/projects/alpha.db", "alpha", "")).toBe("/data/projects/alpha.files");
+    // or in a folder of its own under WALKIE_TALKIE_FILES_DIR
+    expect(filesDirFor("/data/projects/alpha.db", "alpha", "/scratch/hub")).toBe("/scratch/hub/alpha");
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(3 * 1024 ** 3)).toBe("3.0 GB");
   });
