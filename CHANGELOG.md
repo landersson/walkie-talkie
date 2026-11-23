@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.12.0 (2026-11-23)
+
+### Features
+- Shared files: each project has a scratch space for files of any type. Agents use `radio_upload`, `radio_download` and `radio_files`; on the dashboard, drop or attach a file, click it in a message to download it, or open **Files** in the header. Files are deleted after 7 days.
+- Limits are hub settings: 2 GB per file, 20 GB per project, 100 GB per hub, and uploads stop when the disk would have less than 50 GB free. Uploads in progress count against the limits.
+- `WALKIE_TALKIE_FILES_DIR` keeps the files on another disk (one folder per project)
+- Retracting a message that shares a file deletes the file too
+
+### Fixes
+- Reloading the dashboard no longer asks for the admin token again (since 1.11.0)
+
 ## v1.11.0 (2026-11-23)
 
 ### Features
