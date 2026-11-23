@@ -6,6 +6,7 @@ import { channelName } from "./channels.js";
 import { getDashboardHTML } from "./dashboard.js";
 import type { AgentConfigRow } from "./db.js";
 import { createEventStream } from "./events.js";
+import { DAY_MS, FileError, formatBytes } from "./files.js";
 import { launchAgent } from "./launcher.js";
 import { createProject, type Project } from "./project.js";
 import {
@@ -19,11 +20,12 @@ import {
   validateProjectName,
 } from "./projects.js";
 import { getShellHTML } from "./shell.js";
-import type { RegisterRequest, RouteHandler, SendRequest, UserRole } from "./types.js";
+import type { Message, RegisterRequest, RouteHandler, SendRequest, StoredFile, UserRole } from "./types.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 const RESERVED_NAMES = new Set(["system", "slack"]);
 const DEFAULT_HUMAN = "operator";
+const FILE_CLEANUP_INTERVAL_MS = 3_600_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -644,6 +646,126 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     sendJson(res, 200, { ok: true, channel, user });
   };
 
+  // --- Scratch space: files agents and people share, deleted when they expire (see files.ts) ---
+  const { files } = project;
+
+  /** Refuse an upload before reading it; the connection closes so the client stops sending. */
+  function rejectUpload(req: IncomingMessage, res: ServerResponse, status: number, message: string): void {
+    res.writeHead(status, { "Content-Type": "application/json", Connection: "close" });
+    res.end(JSON.stringify({ error: message }));
+    res.on("finish", () => req.destroy());
+  }
+
+  async function uploadFile(req: IncomingMessage, res: ServerResponse, uploader: string): Promise<void> {
+    const url = new URL(req.url ?? "/", "http://hub");
+    const name = url.searchParams.get("name") ?? "";
+    const channel = channelName(url.searchParams.get("channel") || "#all");
+    const to = url.searchParams.get("to") || "@all";
+    const note = url.searchParams.get("message") ?? "";
+    const ttlDays = Number(url.searchParams.get("ttl_days"));
+    if (!name) return rejectUpload(req, res, 400, "Missing 'name' query parameter");
+    if (!dbGetChannel(channel)) return rejectUpload(req, res, 404, `Channel "${channel}" does not exist`);
+    let file: StoredFile;
+    try {
+      file = await files.save(req, {
+        name,
+        mimeType: req.headers["content-type"],
+        uploader,
+        channel,
+        ttlMs: ttlDays > 0 ? ttlDays * DAY_MS : undefined,
+      });
+    } catch (e) {
+      if (!(e instanceof FileError)) throw e;
+      return req.complete ? sendError(res, e.status, e.message) : rejectUpload(req, res, e.status, e.message);
+    }
+    // Tell the channel, with the file attached
+    let message: Message;
+    try {
+      message = routeMessage(uploader, to, note, channel, undefined, {
+        file: { id: file.id, name: file.name, size: file.size },
+      });
+    } catch (e) {
+      files.remove(file.id);
+      return sendError(res, 404, (e as Error).message);
+    }
+    broadcast({
+      type: "message",
+      from: message.from,
+      to: message.to,
+      content: message.content,
+      channel: message.channel,
+      timestamp: message.timestamp,
+      file: message.file,
+      fromRole: message.fromRole,
+    });
+    broadcast({ type: "files_change", timestamp: Date.now() });
+    console.log(`[file-upload] ${uploader} ${file.name} (${formatBytes(file.size)}) -> ${channel}`);
+    sendJson(res, 200, { ...file, messageId: message.id });
+  }
+
+  /** Files are always sent as downloads, never shown by the browser (they could be anything). */
+  function sendFile(res: ServerResponse, file: StoredFile): void {
+    res.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": file.size,
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      "X-Content-Type-Options": "nosniff",
+    });
+    fs.createReadStream(files.filePath(file.id)).pipe(res);
+  }
+
+  function listFiles(res: ServerResponse): void {
+    sendJson(res, 200, { files: files.list(), ...files.usage() });
+  }
+
+  async function deleteFile(req: IncomingMessage, res: ServerResponse, caller: string): Promise<void> {
+    const body = JSON.parse((await readBody(req)) || "{}") as { id?: unknown };
+    const file = typeof body.id === "string" && body.id ? files.find(body.id) : undefined;
+    if (!file) return sendError(res, 404, "No such file (it may have expired)");
+    // Agents delete their own uploads; people on the dashboard can delete any
+    if (getUserRole(caller) !== "human" && file.uploader !== caller) {
+      return sendError(res, 403, "You can only delete files you uploaded");
+    }
+    files.remove(file.id);
+    broadcast({ type: "files_change", timestamp: Date.now() });
+    console.log(`[file-delete] ${caller} ${file.name}`);
+    sendJson(res, 200, { ok: true, id: file.id });
+  }
+
+  const handleFileUpload: RouteHandler = async (req, res, userName) => uploadFile(req, res, userName!);
+  const handleFileList: RouteHandler = async (_req, res) => listFiles(res);
+  const handleFileDelete: RouteHandler = async (req, res, userName) => deleteFile(req, res, userName!);
+
+  const handleFileDownload: RouteHandler = async (req, res) => {
+    const id = new URL(req.url ?? "/", "http://hub").searchParams.get("id") ?? "";
+    const file = id ? files.find(id) : undefined;
+    if (!file) return sendError(res, 404, "No such file (it may have expired)");
+    sendFile(res, file);
+  };
+
+  // The dashboard downloads with a plain link, which can't carry the admin token: it gets a
+  // short-lived ticket for the link instead
+  const handleAdminFileTicket: RouteHandler = async (req, res) => {
+    const body = JSON.parse((await readBody(req)) || "{}") as { id?: unknown };
+    const file = typeof body.id === "string" && body.id ? files.find(body.id) : undefined;
+    if (!file) return sendError(res, 404, "No such file (it may have expired)");
+    sendJson(res, 200, { url: `file-get?ticket=${files.createTicket(file.id)}`, name: file.name });
+  };
+
+  const handleFileGet: RouteHandler = async (req, res) => {
+    const ticket = new URL(req.url ?? "/", "http://hub").searchParams.get("ticket") ?? "";
+    const file = files.redeemTicket(ticket);
+    if (!file) return sendError(res, 404, "This download link has expired; click the file again");
+    sendFile(res, file);
+  };
+
+  function cleanupFiles(): void {
+    const expired = files.cleanup();
+    if (expired.length === 0) return;
+    broadcast({ type: "files_change", timestamp: Date.now() });
+    console.log(`[file-expire] ${project.name}: ${expired.map((f) => f.name).join(", ")}`);
+  }
+
   const handleAdminChannelDelete: RouteHandler = async (req, res) => {
     const body = JSON.parse(await readBody(req)) as { name?: string };
     if (!body.name || typeof body.name !== "string") {
@@ -804,6 +926,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   const publicRoutes: RouteTable = {
     "/users": { method: "GET", handler: handleUsers },
     "/channels": { method: "GET", handler: handleListChannels },
+    "/file-get": { method: "GET", handler: handleFileGet },
   };
 
   const joinRoutes: RouteTable = {
@@ -815,6 +938,10 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     "/kick": { method: "POST", handler: handleKick },
     "/kick-all": { method: "POST", handler: handleKickAll },
     "/admin-send": { method: "POST", handler: handleAdminSend },
+    "/admin-file-upload": { method: "POST", handler: handleFileUpload },
+    "/admin-files": { method: "GET", handler: handleFileList },
+    "/admin-file-ticket": { method: "POST", handler: handleAdminFileTicket },
+    "/admin-file-delete": { method: "POST", handler: handleFileDelete },
     "/admin-channel-create": { method: "POST", handler: handleAdminChannelCreate },
     "/admin-channel-add": { method: "POST", handler: handleAdminChannelAdd },
     "/admin-channel-remove": { method: "POST", handler: handleAdminChannelRemove },
@@ -832,6 +959,10 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
 
   const protectedRoutes: RouteTable = {
     "/send": { method: "POST", handler: handleSend },
+    "/file-upload": { method: "POST", handler: handleFileUpload },
+    "/file-download": { method: "GET", handler: handleFileDownload },
+    "/files": { method: "GET", handler: handleFileList },
+    "/file-delete": { method: "POST", handler: handleFileDelete },
     "/poll": { method: "GET", handler: handlePoll },
     "/inbox": { method: "GET", handler: handleInbox },
     "/unregister": { method: "POST", handler: handleUnregister },
@@ -1066,14 +1197,19 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   restoreSessions();
   const idleTimer = setInterval(() => expireIdleSessions(), IDLE_CHECK_INTERVAL_MS);
   idleTimer.unref();
+  cleanupFiles();
+  const fileTimer = setInterval(cleanupFiles, FILE_CLEANUP_INTERVAL_MS);
+  fileTimer.unref();
 
   /** Stop the project's timers, end its dashboard streams and close its database (agents: see prepareShutdown). */
   function close(): void {
     clearInterval(idleTimer);
+    clearInterval(fileTimer);
     for (const timer of staleTimers.values()) clearTimeout(timer);
     staleTimers.clear();
     project.events.closeAllSSEClients();
     project.db.close();
+    if (project.files.temporary) project.files.destroy();
   }
 
   return {
@@ -1235,6 +1371,7 @@ export function createHubServer(
     for (const presence of hubPresences) presence.apps.delete(app);
     app.prepareShutdown("stop");
     app.close();
+    app.project.files.destroy(); // scratch files are temporary; they don't go into the archive
     const archivedAs = projectsDir ? archiveProjectFiles(projectsDir, name) : null;
     events.broadcast({ type: "project_archive", name, timestamp: Date.now() });
     console.log(`[project-archive] ${name} by ${caller}${archivedAs ? ` -> ${archivedAs}` : ""}`);

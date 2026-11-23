@@ -9,8 +9,10 @@ export type HubEvent =
       channel: string;
       timestamp: number;
       image?: { data: string; mimeType: string };
+      file?: { id: string; name: string; size: number };
       fromRole?: "agent" | "bridge" | "human";
     }
+  | { type: "files_change"; timestamp: number }
   | { type: "join"; name: string; role?: "agent" | "bridge" | "human"; timestamp: number }
   | { type: "leave"; name: string; timestamp: number }
   | { type: "channel_create"; name: string; timestamp: number }

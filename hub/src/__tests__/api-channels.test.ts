@@ -249,7 +249,11 @@ describe("POST /admin-channel-add and /admin-channel-remove", () => {
   const admin = (route: string, body: unknown) =>
     fetch(`${ctx.baseUrl}${route}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.adminToken}`, "X-Walkie-User": "alice" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${ctx.adminToken}`,
+        "X-Walkie-User": "alice",
+      },
       body: JSON.stringify(body),
     });
   const members = async (channel: string) => {
@@ -287,6 +291,8 @@ describe("POST /admin-channel-add and /admin-channel-remove", () => {
     expect((await admin("/admin-channel-add", { channel: "#no-room", user: "refused-agent" })).status).toBe(404);
     expect((await admin("/admin-channel-add", { channel: "#refused-room", user: "alice" })).status).toBe(400);
     expect((await admin("/admin-channel-remove", { channel: "#all", user: "refused-agent" })).status).toBe(400);
-    expect((await admin("/admin-channel-remove", { channel: "#refused-room", user: "refused-agent" })).status).toBe(404);
+    expect((await admin("/admin-channel-remove", { channel: "#refused-room", user: "refused-agent" })).status).toBe(
+      404,
+    );
   });
 });

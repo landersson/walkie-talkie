@@ -3,7 +3,7 @@ import type { Auth } from "./auth.js";
 import type { Channels } from "./channels.js";
 import type { ProjectDB } from "./db.js";
 import type { Polling } from "./polling.js";
-import type { Message, MessageImage } from "./types.js";
+import type { Message, MessageFile, MessageImage } from "./types.js";
 
 export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, polling: Polling) {
   const { getUserRole, getUsersByRole, isUserRegistered } = auth;
@@ -35,7 +35,14 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
     return messages;
   }
 
-  function routeMessage(from: string, to: string, content: string, channel = "#all", image?: MessageImage): Message {
+  function routeMessage(
+    from: string,
+    to: string,
+    content: string,
+    channel = "#all",
+    image?: MessageImage,
+    extra: { file?: MessageFile } = {},
+  ): Message {
     if (!dbGetChannel(channel)) {
       throw new Error(`Channel "${channel}" does not exist`);
     }
@@ -51,6 +58,7 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
         channel,
         timestamp: Date.now(),
         image,
+        file: extra.file,
         fromRole: senderRole,
       };
 
@@ -87,6 +95,7 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
       channel,
       timestamp: Date.now(),
       image,
+      file: extra.file,
       fromRole: senderRole,
     };
 

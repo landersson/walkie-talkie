@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-import type { Message, MessageImage } from "./types.js";
+import type { Message, MessageFile, MessageImage, StoredFile } from "./types.js";
 
 export interface AgentConfigRow {
   id: string;
@@ -120,6 +120,26 @@ export function openProjectDB(dbPath: string) {
     /* column already exists */
   }
 
+  try {
+    db.exec("ALTER TABLE messages ADD COLUMN file TEXT");
+  } catch {
+    /* column already exists */
+  }
+
+  // The project's scratch space: files on disk (see files.ts), described here
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      mime_type TEXT NOT NULL,
+      uploader TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )
+  `);
+
   // Seed #all if it doesn't exist
   const existing = db.prepare("SELECT name FROM channels WHERE name = ?").get("#all");
   if (!existing) {
@@ -185,7 +205,7 @@ export function openProjectDB(dbPath: string) {
 
   function dbSaveMessage(msg: Message): void {
     db.prepare(
-      `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image, file) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       msg.id,
       msg.from,
@@ -194,6 +214,7 @@ export function openProjectDB(dbPath: string) {
       msg.channel,
       msg.timestamp,
       msg.image ? JSON.stringify(msg.image) : null,
+      msg.file ? JSON.stringify(msg.file) : null,
     );
 
     if (msg.channel === "#all") {
@@ -211,6 +232,7 @@ export function openProjectDB(dbPath: string) {
       channel: row.channel as string,
       timestamp: row.timestamp as number,
       image: imageStr ? (JSON.parse(imageStr) as MessageImage) : undefined,
+      file: row.file ? (JSON.parse(row.file as string) as MessageFile) : undefined,
       seq: row.seq as number | undefined,
     };
   }
@@ -224,7 +246,7 @@ export function openProjectDB(dbPath: string) {
     const rows = db
       .prepare(
         `SELECT * FROM (
-        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
+        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image, file FROM messages
         WHERE channel = ? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
         ORDER BY timestamp DESC, rowid DESC LIMIT ?
       ) ORDER BY timestamp ASC, seq ASC`,
@@ -237,7 +259,7 @@ export function openProjectDB(dbPath: string) {
     const rows = db
       .prepare(
         `SELECT * FROM (
-        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
+        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image, file FROM messages
         ORDER BY timestamp DESC, rowid DESC LIMIT ?
       ) ORDER BY timestamp ASC, seq ASC`,
       )
@@ -416,7 +438,61 @@ export function openProjectDB(dbPath: string) {
     db.close();
   }
 
+  // Scratch space files
+  function parseFileRow(row: Record<string, unknown>): StoredFile {
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      size: row.size as number,
+      mimeType: row.mime_type as string,
+      uploader: row.uploader as string,
+      channel: row.channel as string,
+      createdAt: row.created_at as number,
+      expiresAt: row.expires_at as number,
+    };
+  }
+
+  function dbSaveFile(f: StoredFile): void {
+    db.prepare(
+      "INSERT INTO files (id, name, size, mime_type, uploader, channel, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(f.id, f.name, f.size, f.mimeType, f.uploader, f.channel, f.createdAt, f.expiresAt);
+  }
+
+  function dbListFiles(): StoredFile[] {
+    return (db.prepare("SELECT * FROM files ORDER BY created_at DESC").all() as Record<string, unknown>[]).map(
+      parseFileRow,
+    );
+  }
+
+  /** A file by id, or by a start of its id that only one file has. */
+  function dbFindFile(idOrPrefix: string): StoredFile | undefined {
+    const rows = db
+      .prepare("SELECT * FROM files WHERE id LIKE ? ESCAPE '\\' LIMIT 2")
+      .all(`${idOrPrefix.replace(/[\\%_]/g, "\\$&")}%`) as Record<string, unknown>[];
+    return rows.length === 1 ? parseFileRow(rows[0]) : undefined;
+  }
+
+  function dbDeleteFile(id: string): void {
+    db.prepare("DELETE FROM files WHERE id = ?").run(id);
+  }
+
+  function dbExpiredFiles(now: number): StoredFile[] {
+    return (db.prepare("SELECT * FROM files WHERE expires_at <= ?").all(now) as Record<string, unknown>[]).map(
+      parseFileRow,
+    );
+  }
+
+  function dbFilesTotalSize(): number {
+    return (db.prepare("SELECT COALESCE(SUM(size), 0) AS total FROM files").get() as { total: number }).total;
+  }
+
   return {
+    dbSaveFile,
+    dbListFiles,
+    dbFindFile,
+    dbDeleteFile,
+    dbExpiredFiles,
+    dbFilesTotalSize,
     close,
     dbCreateChannel,
     dbSetChannelDescription,

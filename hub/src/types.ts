@@ -1,5 +1,24 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+/** A scratch space file attached to a message. */
+export interface MessageFile {
+  id: string;
+  name: string;
+  size: number;
+}
+
+/** A file in a project's scratch space (stored on disk, deleted when it expires). */
+export interface StoredFile {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  uploader: string;
+  channel: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
 export interface MessageImage {
   data: string; // base64 (no data-URI prefix)
   mimeType: string; // e.g. "image/png"
@@ -13,6 +32,7 @@ export interface Message {
   channel: string;
   timestamp: number;
   image?: MessageImage;
+  file?: MessageFile; // a file in the project's scratch space
   fromRole?: UserRole; // sender's role at send time (not persisted)
   seq?: number; // storage order (SQLite rowid), set on history reads
 }

@@ -2,6 +2,7 @@ import { type Auth, createAuth } from "./auth.js";
 import { type Channels, createChannels } from "./channels.js";
 import { openProjectDB, type ProjectDB } from "./db.js";
 import { createEventStream, type EventStream } from "./events.js";
+import { createFileStore, type FileStore, filesDirFor } from "./files.js";
 import { createPolling, type Polling } from "./polling.js";
 import { createRouter, type Router } from "./router.js";
 
@@ -14,6 +15,7 @@ export interface Project {
   polling: Polling;
   router: Router;
   events: EventStream;
+  files: FileStore;
 }
 
 export function createProject(name: string, dbPath: string): Project {
@@ -24,5 +26,6 @@ export function createProject(name: string, dbPath: string): Project {
   const polling = createPolling((userName) => router.drainQueue(userName));
   const router = createRouter(db, auth, channels, polling);
   const events = createEventStream();
-  return { name, db, auth, channels, polling, router, events };
+  const files = createFileStore(db, filesDirFor(dbPath), { temporary: dbPath === ":memory:" });
+  return { name, db, auth, channels, polling, router, events, files };
 }
