@@ -8,7 +8,7 @@ import type { Message, MessageImage } from "./types.js";
 export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, polling: Polling) {
   const { getUserRole, getUsersByRole, isUserRegistered } = auth;
   const { getChannelMembers, isChannelMember } = channels;
-  const { dbGetChannel, dbSaveMessage } = db;
+  const { dbFindChannelMessage, dbGetChannel, dbSaveMessage } = db;
   const { deliverMessage } = polling;
   const messageQueues = new Map<string, Message[]>();
 
@@ -35,9 +35,23 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
     return messages;
   }
 
-  function routeMessage(from: string, to: string, content: string, channel = "#all", image?: MessageImage): Message {
+  function routeMessage(
+    from: string,
+    to: string,
+    content: string,
+    channel = "#all",
+    image?: MessageImage,
+    replyToId?: string,
+  ): Message {
     if (!dbGetChannel(channel)) {
       throw new Error(`Channel "${channel}" does not exist`);
+    }
+    // A reply names a message of the same channel, by id or a unique start of it
+    let replyTo: string | undefined;
+    if (replyToId) {
+      const parent = dbFindChannelMessage(channel, replyToId);
+      if (!parent) throw new Error(`No message "${replyToId}" in ${channel} to reply to`);
+      replyTo = parent.replyTo ?? parent.id; // replies to a reply join the same thread
     }
     const members = getChannelMembers(channel);
     const senderRole = getUserRole(from) ?? undefined;
@@ -52,6 +66,7 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
         timestamp: Date.now(),
         image,
         fromRole: senderRole,
+        replyTo,
       };
 
       dbSaveMessage(message);
@@ -88,6 +103,7 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
       timestamp: Date.now(),
       image,
       fromRole: senderRole,
+      replyTo,
     };
 
     dbSaveMessage(message);

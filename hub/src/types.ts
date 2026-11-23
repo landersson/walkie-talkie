@@ -15,6 +15,9 @@ export interface Message {
   image?: MessageImage;
   fromRole?: UserRole; // sender's role at send time (not persisted)
   seq?: number; // storage order (SQLite rowid), set on history reads
+  replyTo?: string; // id of the message this one replies to (same channel)
+  editedAt?: number; // set when the sender changed the text
+  retracted?: boolean; // the sender took it back; content and image are gone
 }
 
 export type UserRole = "agent" | "bridge" | "human";
@@ -42,6 +45,7 @@ export interface SendRequest {
   content: string;
   channel?: string;
   image?: MessageImage;
+  replyTo?: string; // id (or a unique start of it) of a message in the same channel
 }
 
 export interface Channel {

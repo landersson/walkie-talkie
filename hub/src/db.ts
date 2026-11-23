@@ -120,6 +120,14 @@ export function openProjectDB(dbPath: string) {
     /* column already exists */
   }
 
+  for (const column of ["reply_to TEXT", "edited_at INTEGER", "retracted_at INTEGER"]) {
+    try {
+      db.exec(`ALTER TABLE messages ADD COLUMN ${column}`);
+    } catch {
+      /* column already exists */
+    }
+  }
+
   // Seed #all if it doesn't exist
   const existing = db.prepare("SELECT name FROM channels WHERE name = ?").get("#all");
   if (!existing) {
@@ -185,7 +193,7 @@ export function openProjectDB(dbPath: string) {
 
   function dbSaveMessage(msg: Message): void {
     db.prepare(
-      `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       msg.id,
       msg.from,
@@ -194,6 +202,7 @@ export function openProjectDB(dbPath: string) {
       msg.channel,
       msg.timestamp,
       msg.image ? JSON.stringify(msg.image) : null,
+      msg.replyTo ?? null,
     );
 
     if (msg.channel === "#all") {
@@ -212,7 +221,33 @@ export function openProjectDB(dbPath: string) {
       timestamp: row.timestamp as number,
       image: imageStr ? (JSON.parse(imageStr) as MessageImage) : undefined,
       seq: row.seq as number | undefined,
+      replyTo: (row.reply_to as string | null) ?? undefined,
+      editedAt: (row.edited_at as number | null) ?? undefined,
+      retracted: row.retracted_at ? true : undefined,
     };
+  }
+
+  const MESSAGE_COLUMNS = `rowid AS seq, id, "from", "to", content, channel, timestamp, image, reply_to, edited_at, retracted_at`;
+
+  function dbGetMessage(id: string): Message | undefined {
+    const row = db.prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = ?`).get(id);
+    return row ? parseMessageRow(row as Record<string, unknown>) : undefined;
+  }
+
+  /** A channel's message by id, or by a start of its id that only one message there has. */
+  function dbFindChannelMessage(channel: string, idOrPrefix: string): Message | undefined {
+    const rows = db
+      .prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE channel = ? AND id LIKE ? ESCAPE '\\' LIMIT 2`)
+      .all(channel, `${idOrPrefix.replace(/[\\%_]/g, "\\$&")}%`) as Record<string, unknown>[];
+    return rows.length === 1 ? parseMessageRow(rows[0]) : undefined;
+  }
+
+  function dbEditMessage(id: string, content: string, editedAt: number): void {
+    db.prepare("UPDATE messages SET content = ?, edited_at = ? WHERE id = ?").run(content, editedAt, id);
+  }
+
+  function dbRetractMessage(id: string, retractedAt: number): void {
+    db.prepare("UPDATE messages SET content = '', image = NULL, retracted_at = ? WHERE id = ?").run(retractedAt, id);
   }
 
   /**
@@ -224,7 +259,7 @@ export function openProjectDB(dbPath: string) {
     const rows = db
       .prepare(
         `SELECT * FROM (
-        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
+        SELECT ${MESSAGE_COLUMNS} FROM messages
         WHERE channel = ? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
         ORDER BY timestamp DESC, rowid DESC LIMIT ?
       ) ORDER BY timestamp ASC, seq ASC`,
@@ -237,7 +272,7 @@ export function openProjectDB(dbPath: string) {
     const rows = db
       .prepare(
         `SELECT * FROM (
-        SELECT rowid AS seq, id, "from", "to", content, channel, timestamp, image FROM messages
+        SELECT ${MESSAGE_COLUMNS} FROM messages
         ORDER BY timestamp DESC, rowid DESC LIMIT ?
       ) ORDER BY timestamp ASC, seq ASC`,
       )
@@ -429,6 +464,10 @@ export function openProjectDB(dbPath: string) {
     dbGetUserChannels,
     dbSaveMessage,
     dbGetChannelMessages,
+    dbGetMessage,
+    dbFindChannelMessage,
+    dbEditMessage,
+    dbRetractMessage,
     dbGetRecentMessages,
     dbDeleteChannelMessages,
     dbUpdateReadCursor,

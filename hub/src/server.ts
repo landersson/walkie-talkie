@@ -19,7 +19,7 @@ import {
   validateProjectName,
 } from "./projects.js";
 import { getShellHTML } from "./shell.js";
-import type { RegisterRequest, RouteHandler, SendRequest, UserRole } from "./types.js";
+import type { Message, RegisterRequest, RouteHandler, SendRequest, UserRole } from "./types.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 const RESERVED_NAMES = new Set(["system", "slack"]);
@@ -133,6 +133,10 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     dbGetAgentConfig,
     dbGetChannel,
     dbGetChannelMessages,
+    dbGetMessage,
+    dbFindChannelMessage,
+    dbEditMessage,
+    dbRetractMessage,
     dbGetRecentMessages,
     dbGetUnreadCounts,
     dbGetUserChannels,
@@ -265,6 +269,62 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
   };
 
+  function broadcastMessage(message: Message): void {
+    broadcast({
+      type: "message",
+      id: message.id,
+      from: message.from,
+      to: message.to,
+      content: message.content,
+      channel: message.channel,
+      timestamp: message.timestamp,
+      image: message.image,
+      fromRole: message.fromRole,
+      replyTo: message.replyTo,
+    });
+  }
+
+  function replyToField(value: unknown): string | undefined {
+    return typeof value === "string" && value ? value : undefined;
+  }
+
+  // Senders can change what they said or take it back; everyone watching sees the change
+  async function changeMessage(req: IncomingMessage, res: ServerResponse, caller: string, retract: boolean) {
+    const body = JSON.parse(await readBody(req)) as { id?: unknown; channel?: unknown; content?: unknown };
+    if (typeof body.id !== "string" || !body.id) return sendError(res, 400, "Missing or invalid 'id' field");
+    if (!retract && (typeof body.content !== "string" || !body.content.trim())) {
+      return sendError(res, 400, "Missing or invalid 'content' field");
+    }
+    const message =
+      typeof body.channel === "string" && body.channel
+        ? dbFindChannelMessage(channelName(body.channel), body.id)
+        : dbGetMessage(body.id);
+    if (!message) return sendError(res, 404, `No message "${body.id}"`);
+    if (message.from !== caller) return sendError(res, 403, "You can only change your own messages");
+    if (message.retracted) return sendError(res, 409, "That message was retracted");
+    const now = Date.now();
+    if (retract) {
+      dbRetractMessage(message.id, now);
+      broadcast({ type: "message_update", id: message.id, channel: message.channel, retracted: true, timestamp: now });
+    } else {
+      const content = body.content as string;
+      dbEditMessage(message.id, content, now);
+      broadcast({
+        type: "message_update",
+        id: message.id,
+        channel: message.channel,
+        content,
+        editedAt: now,
+        timestamp: now,
+      });
+    }
+    console.log(`[${retract ? "retract" : "edit"}] ${caller} ${message.id} (${message.channel})`);
+    sendJson(res, 200, { ok: true, id: message.id });
+  }
+
+  const handleMessageEdit: RouteHandler = async (req, res, userName) => changeMessage(req, res, userName!, false);
+  const handleMessageRetract: RouteHandler = async (req, res, userName) => changeMessage(req, res, userName!, true);
+
   const handleSend: RouteHandler = async (req, res, userName) => {
     const body = JSON.parse(await readBody(req)) as SendRequest;
     if (!body.to || (!body.content && !body.image)) {
@@ -281,17 +341,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     const content = body.content || "";
     const channel = channelName(body.channel || "#all");
     try {
-      const message = routeMessage(userName!, body.to, content, channel, body.image);
-      broadcast({
-        type: "message",
-        from: message.from,
-        to: message.to,
-        content: message.content,
-        channel: message.channel,
-        timestamp: message.timestamp,
-        image: message.image,
-        fromRole: message.fromRole,
-      });
+      const message = routeMessage(userName!, body.to, content, channel, body.image, replyToField(body.replyTo));
+      broadcastMessage(message);
       console.log(`[send] ${userName} -> ${body.to} (${channel}): ${content}${body.image ? " [+image]" : ""}`);
       sendJson(res, 200, { id: message.id, to: message.to });
     } catch (e) {
@@ -396,6 +447,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       content?: string;
       channel?: string;
       image?: { data: string; mimeType: string };
+      replyTo?: unknown;
     };
     const from = userName!;
     if (!body.to || (!body.content && !body.image)) {
@@ -404,17 +456,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     const content = body.content || "";
     const channel = channelName(body.channel || "#all");
     try {
-      const message = routeMessage(from, body.to, content, channel, body.image);
-      broadcast({
-        type: "message",
-        from: message.from,
-        to: message.to,
-        content: message.content,
-        channel: message.channel,
-        timestamp: message.timestamp,
-        image: message.image,
-        fromRole: message.fromRole,
-      });
+      const message = routeMessage(from, body.to, content, channel, body.image, replyToField(body.replyTo));
+      broadcastMessage(message);
       console.log(`[admin-send] ${from} -> ${body.to} (${channel}): ${content}${body.image ? " [+image]" : ""}`);
       sendJson(res, 200, { id: message.id, to: message.to });
     } catch (e) {
@@ -815,6 +858,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     "/kick": { method: "POST", handler: handleKick },
     "/kick-all": { method: "POST", handler: handleKickAll },
     "/admin-send": { method: "POST", handler: handleAdminSend },
+    "/admin-message-edit": { method: "POST", handler: handleMessageEdit },
+    "/admin-message-retract": { method: "POST", handler: handleMessageRetract },
     "/admin-channel-create": { method: "POST", handler: handleAdminChannelCreate },
     "/admin-channel-add": { method: "POST", handler: handleAdminChannelAdd },
     "/admin-channel-remove": { method: "POST", handler: handleAdminChannelRemove },
@@ -832,6 +877,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
 
   const protectedRoutes: RouteTable = {
     "/send": { method: "POST", handler: handleSend },
+    "/message-edit": { method: "POST", handler: handleMessageEdit },
+    "/message-retract": { method: "POST", handler: handleMessageRetract },
     "/poll": { method: "GET", handler: handlePoll },
     "/inbox": { method: "GET", handler: handleInbox },
     "/unregister": { method: "POST", handler: handleUnregister },

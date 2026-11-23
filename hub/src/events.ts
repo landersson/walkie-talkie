@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 export type HubEvent =
   | {
       type: "message";
+      id: string;
       from: string;
       to: string;
       content: string;
@@ -10,6 +11,16 @@ export type HubEvent =
       timestamp: number;
       image?: { data: string; mimeType: string };
       fromRole?: "agent" | "bridge" | "human";
+      replyTo?: string;
+    }
+  | {
+      type: "message_update";
+      id: string;
+      channel: string;
+      content?: string;
+      editedAt?: number;
+      retracted?: boolean;
+      timestamp: number;
     }
   | { type: "join"; name: string; role?: "agent" | "bridge" | "human"; timestamp: number }
   | { type: "leave"; name: string; timestamp: number }

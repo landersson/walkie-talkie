@@ -579,6 +579,114 @@ ${DIALOG_CSS}
   .msg .content.md {
     white-space: normal;
   }
+  /* Long posts show their first lines; "Show more" unfolds the rest */
+  .msg .content.collapsed {
+    max-height: 13em;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent);
+    mask-image: linear-gradient(to bottom, #000 65%, transparent);
+  }
+  .show-more {
+    margin-top: 4px;
+    padding: 0;
+    background: none;
+    border: none;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .show-more:hover { text-decoration: underline; }
+
+  /* Reply, edit and retract: shown when hovering over a message */
+  .msg { position: relative; }
+  .msg-actions {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: none;
+    gap: 4px;
+  }
+  .msg:hover > .msg-actions { display: flex; }
+  .msg-actions button, .thread-toggle {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    background: var(--bg-raised);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .msg-actions button:hover, .thread-toggle:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+  .msg-actions .act-retract:hover { color: var(--red); border-color: var(--red-border); }
+  .msg .edited {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-left: 6px;
+  }
+  .msg .content.retracted {
+    font-style: italic;
+    color: var(--text-tertiary);
+  }
+  .msg .edit-box {
+    width: 100%;
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 10px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    resize: vertical;
+  }
+  .msg .edit-buttons { display: flex; gap: 6px; margin-top: 4px; }
+
+  /* Threads: replies sit under the message they answer, folded until opened */
+  .thread { margin-top: 6px; }
+  .thread-toggle.has-new { color: var(--accent); border-color: var(--accent); }
+  .thread-replies {
+    margin-top: 6px;
+    padding-left: 12px;
+    border-left: 2px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .thread-replies .msg { font-size: 15px; padding: 6px 10px; }
+  .msg .reply-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-right: 6px;
+  }
+  #reply-bar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-raised);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  #reply-bar.active { display: flex; }
+  #reply-bar .reply-snippet {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--text-tertiary);
+  }
+  #reply-bar button {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 14px;
+  }
   .content.md p {
     margin: 0 0 6px;
   }
@@ -1092,6 +1200,7 @@ ${DIALOG_CSS}
         <button id="new-msg-btn">New messages &darr;</button>
       </div>
       <div id="typing-bar"></div>
+      <div id="reply-bar"><span>Replying to <strong id="reply-to-name"></strong></span><span class="reply-snippet" id="reply-snippet"></span><button id="reply-cancel" title="Cancel the reply (Esc)">&times;</button></div>
       <div id="image-preview"></div>
       <div class="input-bar">
         <span class="input-tag channel" id="channel-tag">#all</span>
@@ -1540,9 +1649,14 @@ ${LOGIN_SCRIPT}
       }
     }
 
-    function buildMessageEl(html, cls, channel, ts, seq) {
+    function buildMessageEl(html, cls, channel, ts, seq, m) {
       const div = document.createElement("div");
       div.className = "msg " + cls;
+      if (m && m.id) {
+        div.dataset.id = m.id;
+        div.dataset.from = m.from;
+        if (m.replyTo) div.dataset.replyTo = m.replyTo;
+      }
       if (channel) div.dataset.channel = channel;
       div.dataset.ts = String(ts || Date.now());
       if (seq) div.dataset.seq = String(seq);
@@ -1560,11 +1674,50 @@ ${LOGIN_SCRIPT}
     function messageHtml(m) {
       return '<span class="time">' + formatTime(m.timestamp) + '</span>' +
         '<span class="channel-tag">' + (m.channel || "#all") + '</span>' +
+        (m.replyTo ? '<span class="reply-tag" title="A reply to an earlier message">&#8618; reply</span>' : "") +
         '<span class="from">' + m.from + '</span> ' +
         '<span class="to">&rarr; ' + m.to + '</span>' +
-        '<div class="content' + (markdownOn ? " md" : "") + '" data-raw="' + escapeHtml(m.content) + '">' + contentHtml(m.content) + '</div>' +
-        renderImageTag(m.image);
+        (m.editedAt && !m.retracted ? '<span class="edited" title="Edited ' + formatTime(m.editedAt) + '">(edited)</span>' : "") +
+        (m.retracted ? '<div class="content retracted">Message retracted</div>' : contentBlockHtml(m.content) + renderImageTag(m.image)) +
+        actionsHtml(m);
     }
+
+    function contentBlockHtml(text) {
+      const long = isLong(text);
+      return '<div class="content' + (markdownOn ? " md" : "") + (long ? " collapsed" : "") +
+        '" data-raw="' + escapeHtml(text) + '">' + contentHtml(text) + '</div>' +
+        (long ? '<button class="show-more">Show more</button>' : "");
+    }
+
+    // Anyone can reply; only the sender can edit or retract
+    function actionsHtml(m) {
+      if (!m.id || m.retracted) return "";
+      const own = m.from === MY_NAME;
+      return '<span class="msg-actions">' +
+        '<button class="act-reply" title="Reply in a thread">Reply</button>' +
+        (own ? '<button class="act-edit" title="Change this message">Edit</button>' +
+          '<button class="act-retract" title="Take this message back">Retract</button>' : "") +
+        '</span>';
+    }
+
+    // Long posts start folded, so a channel full of agent reports stays skimmable
+    const LONG_POST_LINES = 12;
+    const LONG_POST_CHARS = 1200;
+    function isLong(text) {
+      return !!text && (text.length > LONG_POST_CHARS || text.split("\\n").length > LONG_POST_LINES);
+    }
+
+    messagesEl.addEventListener("click", (e) => {
+      if (handleMessageAction(e)) return;
+      const btn = e.target.closest(".show-more");
+      if (!btn) return;
+      const content = btn.parentElement.querySelector(".content");
+      const folded = content.classList.toggle("collapsed");
+      btn.textContent = folded ? "Show more" : "Show less";
+      if (folded && content.getBoundingClientRect().top < messagesEl.getBoundingClientRect().top) {
+        btn.closest(".msg").scrollIntoView({ block: "nearest" });
+      }
+    });
 
     // Agents write Markdown; the Markdown button switches between formatted and plain text
     ${renderMarkdown.toString()}
@@ -1590,9 +1743,10 @@ ${LOGIN_SCRIPT}
       if (keepBottom) scrollBottom();
     };
 
-    function addMessage(html, cls, channel, ts) {
+    function addMessage(html, cls, channel, ts, m) {
       clearEmpty();
-      const div = buildMessageEl(html, cls, channel, ts);
+      const div = buildMessageEl(html, cls, channel, ts, undefined, m);
+      if (m && m.replyTo && placeInThread(div, true)) return;
       messagesEl.appendChild(div);
       // Follow new messages only when already at the bottom (or when you sent it);
       // otherwise remember the first unseen message and offer a jump button
@@ -1663,8 +1817,147 @@ ${LOGIN_SCRIPT}
       let next = messagesEl.firstElementChild;
       for (const m of messages) {
         while (next && !isAfter(next, m)) next = next.nextElementSibling;
-        messagesEl.insertBefore(buildMessageEl(messageHtml(m), messageClass(m.from), m.channel || "#all", m.timestamp, m.seq), next);
+        messagesEl.insertBefore(buildMessageEl(messageHtml(m), messageClass(m.from), m.channel || "#all", m.timestamp, m.seq, m), next);
       }
+      // Replies whose message is now on screen move under it
+      for (const reply of messagesEl.querySelectorAll(":scope > .msg[data-reply-to]")) placeInThread(reply, false);
+    }
+
+    function findMessageEl(id) {
+      return messagesEl.querySelector('.msg[data-id="' + CSS.escape(id) + '"]');
+    }
+
+    // Put a reply under the message it answers, in time order; false if that message isn't shown
+    function placeInThread(div, live) {
+      const parent = findMessageEl(div.dataset.replyTo);
+      if (!parent || parent === div) return false;
+      let thread = parent.querySelector(":scope > .thread");
+      if (!thread) {
+        thread = document.createElement("div");
+        thread.className = "thread";
+        thread.innerHTML = '<button class="thread-toggle"></button><div class="thread-replies" hidden></div>';
+        parent.insertBefore(thread, parent.querySelector(":scope > .msg-actions"));
+      }
+      const replies = thread.querySelector(".thread-replies");
+      div.querySelector(".reply-tag")?.remove();
+      const ts = Number(div.dataset.ts);
+      const later = [...replies.children].find(r => Number(r.dataset.ts) > ts);
+      replies.insertBefore(div, later || null);
+      if (live && replies.hidden && div.dataset.from !== MY_NAME) thread.querySelector(".thread-toggle").classList.add("has-new");
+      updateThreadToggle(thread);
+      return true;
+    }
+
+    function updateThreadToggle(thread) {
+      const replies = thread.querySelector(".thread-replies");
+      const n = replies.children.length;
+      const toggle = thread.querySelector(".thread-toggle");
+      const last = replies.lastElementChild;
+      toggle.textContent = replies.hidden
+        ? n + (n === 1 ? " reply" : " replies") + (last ? " \u00b7 last from " + last.dataset.from : "") + (toggle.classList.contains("has-new") ? " \u00b7 new" : "")
+        : "Hide replies";
+    }
+
+    // Reply, edit, retract and thread buttons on messages
+    function handleMessageAction(e) {
+      const toggle = e.target.closest(".thread-toggle");
+      if (toggle) {
+        const thread = toggle.parentElement;
+        const replies = thread.querySelector(".thread-replies");
+        replies.hidden = !replies.hidden;
+        toggle.classList.remove("has-new");
+        updateThreadToggle(thread);
+        return true;
+      }
+      const btn = e.target.closest(".msg-actions button");
+      if (!btn) return false;
+      const msg = btn.closest(".msg");
+      if (btn.classList.contains("act-reply")) startReply(msg);
+      else if (btn.classList.contains("act-edit")) startEdit(msg);
+      else if (btn.classList.contains("act-retract")) retractMessage(msg);
+      return true;
+    }
+
+    // --- Replies ---
+    const replyBarEl = document.getElementById("reply-bar");
+    let replyTarget = null; // id of the message being replied to
+
+    function startReply(msg) {
+      // Replies to a reply join its thread
+      replyTarget = msg.dataset.replyTo || msg.dataset.id;
+      const content = msg.querySelector(":scope > .content");
+      document.getElementById("reply-to-name").textContent = msg.dataset.from;
+      document.getElementById("reply-snippet").textContent = content ? (content.dataset.raw || content.textContent).slice(0, 140) : "";
+      replyBarEl.classList.add("active");
+      sendInputEl.focus();
+    }
+
+    function cancelReply() {
+      replyTarget = null;
+      replyBarEl.classList.remove("active");
+    }
+    document.getElementById("reply-cancel").onclick = cancelReply;
+
+    // --- Edit and retract your own messages ---
+    function startEdit(msg) {
+      const content = msg.querySelector(":scope > .content");
+      if (!content || msg.querySelector(":scope > .edit-box")) return;
+      const box = document.createElement("textarea");
+      box.className = "edit-box";
+      box.value = content.dataset.raw || "";
+      box.rows = Math.min(12, box.value.split("\\n").length + 1);
+      const buttons = document.createElement("div");
+      buttons.className = "edit-buttons";
+      buttons.innerHTML = '<button class="btn-save">Save</button><button class="btn-cancel">Cancel</button>';
+      content.style.display = "none";
+      content.after(box, buttons);
+      box.focus();
+      const close = () => { box.remove(); buttons.remove(); content.style.display = ""; };
+      const save = () => {
+        const text = box.value.trim();
+        if (!text || text === content.dataset.raw) return close();
+        fetch("admin-message-edit", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: msg.dataset.id, content: text }) })
+          .then(r => r.json())
+          .then(data => { if (data.error) alert(data.error); else close(); })
+          .catch(() => alert("Could not reach the Hub"));
+      };
+      buttons.querySelector(".btn-save").onclick = save;
+      buttons.querySelector(".btn-cancel").onclick = close;
+      box.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.preventDefault(); close(); }
+        else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+      });
+    }
+
+    function retractMessage(msg) {
+      if (!confirm("Retract this message? Everyone will see that it was retracted.")) return;
+      fetch("admin-message-retract", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: msg.dataset.id }) })
+        .then(r => r.json())
+        .then(data => { if (data.error) alert(data.error); })
+        .catch(() => alert("Could not reach the Hub"));
+    }
+
+    // A sender changed or took back a message
+    function applyMessageUpdate(ev) {
+      const msg = findMessageEl(ev.id);
+      if (!msg) return;
+      msg.querySelector(":scope > .edit-box")?.remove();
+      msg.querySelector(":scope > .edit-buttons")?.remove();
+      const oldContent = msg.querySelector(":scope > .content");
+      msg.querySelector(":scope > .show-more")?.remove();
+      if (ev.retracted) {
+        msg.querySelector(":scope > .msg-image")?.remove();
+        msg.querySelector(":scope > .msg-actions")?.remove();
+        msg.querySelector(":scope > .edited")?.remove();
+        oldContent?.insertAdjacentHTML("beforebegin", '<div class="content retracted">Message retracted</div>');
+      } else {
+        oldContent?.insertAdjacentHTML("beforebegin", contentBlockHtml(ev.content));
+        if (!msg.querySelector(":scope > .edited")) {
+          msg.querySelector(":scope > .to")?.insertAdjacentHTML("afterend", '<span class="edited">(edited)</span>');
+        }
+        msg.querySelector(":scope > .edited").title = "Edited " + formatTime(ev.editedAt);
+      }
+      oldContent?.remove();
     }
 
     function loadHistory(channel) {
@@ -2035,6 +2328,7 @@ ${LOGIN_SCRIPT}
       const target = recipientTarget;
       const payload = { to: target, content, channel };
       if (pendingImage) payload.image = pendingImage;
+      if (replyTarget) payload.replyTo = replyTarget;
       fetch("admin-send", {
         method: "POST",
         headers: adminHeaders,
@@ -2042,6 +2336,7 @@ ${LOGIN_SCRIPT}
       }).then(() => {
         sendInputEl.value = "";
         sendInputEl.style.height = "auto";
+        cancelReply();
         pendingImage = null;
         renderImagePreview();
         sendInputEl.focus();
@@ -2065,6 +2360,7 @@ ${LOGIN_SCRIPT}
         if (e.key === "Escape") { e.preventDefault(); hidePopup(); return; }
       }
       if (e.isComposing) return;
+      if (e.key === "Escape" && replyTarget) { e.preventDefault(); cancelReply(); return; }
       if (e.key === "Enter" && !e.shiftKey && !e.metaKey) { e.preventDefault(); sendMessage(); }
     });
 
@@ -2378,7 +2674,7 @@ ${LOGIN_SCRIPT}
           if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
           const msgChannel = ev.channel || "#all";
           if (!historyState[msgChannel] && !firstLiveTs[msgChannel]) firstLiveTs[msgChannel] = ev.timestamp;
-          addMessage(messageHtml(ev), messageClass(ev.from, ev.fromRole), msgChannel, ev.timestamp);
+          addMessage(messageHtml(ev), messageClass(ev.from, ev.fromRole), msgChannel, ev.timestamp, ev);
           // Unread tracking
           if (msgChannel === selectedChannel && paneActive) {
             if (document.hidden && ev.from !== MY_NAME) unseenWhileHidden = true;
@@ -2387,6 +2683,8 @@ ${LOGIN_SCRIPT}
             unreadCounts[msgChannel] = (unreadCounts[msgChannel] || 0) + 1;
             renderChannels();
           }
+        } else if (ev.type === "message_update") {
+          applyMessageUpdate(ev);
         } else if (ev.type === "channel_create") {
           refreshChannels();
           addMessage(
