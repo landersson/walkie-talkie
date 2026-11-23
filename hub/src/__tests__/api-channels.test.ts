@@ -210,3 +210,37 @@ describe("GET /channels", () => {
     expect(all).toBeDefined();
   });
 });
+
+describe("POST /send to a channel", () => {
+  const post = (token: string, route: string, body: unknown) =>
+    fetch(`${ctx.baseUrl}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+
+  it("accepts the channel name without #", async () => {
+    const sender = await registerUser(ctx, "nohash-sender");
+    const reader = await registerUser(ctx, "nohash-reader");
+    await post(sender, "/channel-create", { name: "nohash-room" });
+    expect((await post(reader, "/channel-join", { channel: "nohash-room" })).status).toBe(200);
+
+    const res = await post(sender, "/send", { to: "@all", content: "hello room", channel: "nohash-room" });
+    expect(res.status).toBe(200);
+    const inbox = await fetch(`${ctx.baseUrl}/inbox`, { headers: { Authorization: `Bearer ${reader}` } });
+    const { messages } = (await inbox.json()) as { messages: { content: string; channel: string }[] };
+    expect(messages).toContainEqual(expect.objectContaining({ content: "hello room", channel: "#nohash-room" }));
+  });
+
+  it("rejects a channel that does not exist", async () => {
+    const sender = await registerUser(ctx, "nochan-sender");
+    const res = await post(sender, "/send", { to: "@all", content: "lost", channel: "#no-such-room" });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toContain("does not exist");
+    const history = await fetch(`${ctx.baseUrl}/admin-channel-history?channel=${encodeURIComponent("#no-such-room")}`, {
+      headers: { Authorization: `Bearer ${ctx.adminToken}` },
+    });
+    const { messages } = (await history.json()) as { messages: { content: string }[] };
+    expect(messages).toEqual([]);
+  });
+});

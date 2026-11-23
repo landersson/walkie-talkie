@@ -1,5 +1,10 @@
 import type { ProjectDB } from "./db.js";
 
+/** Channel names start with "#"; accept them without it too */
+export function channelName(name: string): string {
+  return name.startsWith("#") ? name : `#${name}`;
+}
+
 export function createChannels(db: ProjectDB) {
   const { dbAddChannelMember, dbGetChannel, dbRemoveAllMembersOfChannel, dbRemoveChannelMember } = db;
   const channelMembers = new Map<string, Set<string>>([["#all", new Set()]]);

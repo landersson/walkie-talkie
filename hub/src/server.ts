@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
+import { channelName } from "./channels.js";
 import { getDashboardHTML } from "./dashboard.js";
 import type { AgentConfigRow } from "./db.js";
 import { createEventStream } from "./events.js";
@@ -271,14 +272,14 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
     // Typing indicator: broadcast typing event without routing to chat log
     if (body.content === "TYPING") {
-      const channel = body.channel || "#all";
+      const channel = channelName(body.channel || "#all");
       dbUpdateReadCursor(userName!, channel);
       broadcast({ type: "typing", name: userName!, channel, timestamp: Date.now() });
       console.log(`[typing] ${userName}`);
       return sendJson(res, 200, { id: "typing", to: body.to });
     }
     const content = body.content || "";
-    const channel = body.channel || "#all";
+    const channel = channelName(body.channel || "#all");
     try {
       const message = routeMessage(userName!, body.to, content, channel, body.image);
       broadcast({
@@ -401,7 +402,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       return sendError(res, 400, "Missing 'to' or 'content' field");
     }
     const content = body.content || "";
-    const channel = body.channel || "#all";
+    const channel = channelName(body.channel || "#all");
     try {
       const message = routeMessage(from, body.to, content, channel, body.image);
       broadcast({
@@ -442,19 +443,19 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
     const parsed = parseDescription(body.description);
     if ("error" in parsed) return sendError(res, 400, parsed.error);
-    const channelName = body.name.startsWith("#") ? body.name : `#${body.name}`;
-    if (dbGetChannel(channelName)) {
-      return sendError(res, 409, `Channel "${channelName}" already exists`);
+    const name = channelName(body.name);
+    if (dbGetChannel(name)) {
+      return sendError(res, 409, `Channel "${name}" already exists`);
     }
     try {
-      dbCreateChannel(channelName, userName!, parsed.description);
-      ensureChannelMembership(channelName);
+      dbCreateChannel(name, userName!, parsed.description);
+      ensureChannelMembership(name);
       // Auto-join the creator
-      joinChannel(channelName, userName!);
-      broadcast({ type: "channel_create", name: channelName, timestamp: Date.now() });
-      broadcast({ type: "channel_join", channel: channelName, userName: userName!, timestamp: Date.now() });
-      console.log(`[channel-create] ${channelName} by ${userName}`);
-      sendJson(res, 200, { ok: true, channel: channelName });
+      joinChannel(name, userName!);
+      broadcast({ type: "channel_create", name, timestamp: Date.now() });
+      broadcast({ type: "channel_join", channel: name, userName: userName!, timestamp: Date.now() });
+      console.log(`[channel-create] ${name} by ${userName}`);
+      sendJson(res, 200, { ok: true, channel: name });
     } catch (e) {
       sendError(res, 500, (e as Error).message);
     }
@@ -465,11 +466,12 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     if (!body.channel || typeof body.channel !== "string") {
       return sendError(res, 400, "Missing or invalid 'channel' field");
     }
+    const channel = channelName(body.channel);
     try {
-      joinChannel(body.channel, userName!);
-      broadcast({ type: "channel_join", channel: body.channel, userName: userName!, timestamp: Date.now() });
-      console.log(`[channel-join] ${userName} -> ${body.channel}`);
-      sendJson(res, 200, { ok: true, channel: body.channel });
+      joinChannel(channel, userName!);
+      broadcast({ type: "channel_join", channel, userName: userName!, timestamp: Date.now() });
+      console.log(`[channel-join] ${userName} -> ${channel}`);
+      sendJson(res, 200, { ok: true, channel });
     } catch (e) {
       sendError(res, 404, (e as Error).message);
     }
@@ -480,13 +482,14 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     if (!body.channel || typeof body.channel !== "string") {
       return sendError(res, 400, "Missing or invalid 'channel' field");
     }
-    if (body.channel === "#all") {
+    const channel = channelName(body.channel);
+    if (channel === "#all") {
       return sendError(res, 400, "Cannot leave #all");
     }
-    leaveChannel(body.channel, userName!);
-    broadcast({ type: "channel_leave", channel: body.channel, userName: userName!, timestamp: Date.now() });
-    console.log(`[channel-leave] ${userName} <- ${body.channel}`);
-    sendJson(res, 200, { ok: true, channel: body.channel });
+    leaveChannel(channel, userName!);
+    broadcast({ type: "channel_leave", channel, userName: userName!, timestamp: Date.now() });
+    console.log(`[channel-leave] ${userName} <- ${channel}`);
+    sendJson(res, 200, { ok: true, channel });
   };
 
   const handleChannelInvite: RouteHandler = async (req, res, userName) => {
@@ -494,6 +497,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     if (!body.channel || typeof body.channel !== "string") {
       return sendError(res, 400, "Missing or invalid 'channel' field");
     }
+    const channel = channelName(body.channel);
     if (!body.user || typeof body.user !== "string") {
       return sendError(res, 400, "Missing or invalid 'user' field");
     }
@@ -502,12 +506,12 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       return sendError(res, 404, `User "${targetName}" is not connected`);
     }
     try {
-      joinChannel(body.channel, targetName);
-      broadcast({ type: "channel_join", channel: body.channel, userName: targetName, timestamp: Date.now() });
+      joinChannel(channel, targetName);
+      broadcast({ type: "channel_join", channel, userName: targetName, timestamp: Date.now() });
       // Notify the invited user via a system message in the channel
-      routeMessage("system", `@${targetName}`, `You have been invited to ${body.channel} by ${userName}`, body.channel);
-      console.log(`[channel-invite] ${userName} invited ${targetName} to ${body.channel}`);
-      sendJson(res, 200, { ok: true, channel: body.channel, user: targetName });
+      routeMessage("system", `@${targetName}`, `You have been invited to ${channel} by ${userName}`, channel);
+      console.log(`[channel-invite] ${userName} invited ${targetName} to ${channel}`);
+      sendJson(res, 200, { ok: true, channel, user: targetName });
     } catch (e) {
       sendError(res, 400, (e as Error).message);
     }
@@ -548,16 +552,16 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
     const parsed = parseDescription(body.description);
     if ("error" in parsed) return sendError(res, 400, parsed.error);
-    const channelName = body.name.startsWith("#") ? body.name : `#${body.name}`;
-    if (dbGetChannel(channelName)) {
-      return sendError(res, 409, `Channel "${channelName}" already exists`);
+    const name = channelName(body.name);
+    if (dbGetChannel(name)) {
+      return sendError(res, 409, `Channel "${name}" already exists`);
     }
     try {
-      dbCreateChannel(channelName, userName!, parsed.description);
-      ensureChannelMembership(channelName);
-      broadcast({ type: "channel_create", name: channelName, timestamp: Date.now() });
-      console.log(`[admin-channel-create] ${channelName}`);
-      sendJson(res, 200, { ok: true, channel: channelName });
+      dbCreateChannel(name, userName!, parsed.description);
+      ensureChannelMembership(name);
+      broadcast({ type: "channel_create", name, timestamp: Date.now() });
+      console.log(`[admin-channel-create] ${name}`);
+      sendJson(res, 200, { ok: true, channel: name });
     } catch (e) {
       sendError(res, 500, (e as Error).message);
     }

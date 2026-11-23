@@ -8,7 +8,7 @@ import type { Message, MessageImage } from "./types.js";
 export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, polling: Polling) {
   const { getUserRole, getUsersByRole, isUserRegistered } = auth;
   const { getChannelMembers, isChannelMember } = channels;
-  const { dbSaveMessage } = db;
+  const { dbGetChannel, dbSaveMessage } = db;
   const { deliverMessage } = polling;
   const messageQueues = new Map<string, Message[]>();
 
@@ -36,6 +36,9 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
   }
 
   function routeMessage(from: string, to: string, content: string, channel = "#all", image?: MessageImage): Message {
+    if (!dbGetChannel(channel)) {
+      throw new Error(`Channel "${channel}" does not exist`);
+    }
     const members = getChannelMembers(channel);
     const senderRole = getUserRole(from) ?? undefined;
 
