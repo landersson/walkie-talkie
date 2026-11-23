@@ -604,6 +604,46 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
   };
 
+  // Dashboard: put an agent into a channel, or take one out
+  async function readChannelMember(req: IncomingMessage): Promise<{ channel: string; user: string } | string> {
+    const body = JSON.parse(await readBody(req)) as { channel?: unknown; user?: unknown };
+    if (typeof body.channel !== "string" || !body.channel) return "Missing or invalid 'channel' field";
+    if (typeof body.user !== "string" || !body.user) return "Missing or invalid 'user' field";
+    return { channel: channelName(body.channel), user: body.user.replace(/^@/, "") };
+  }
+
+  const handleAdminChannelAdd: RouteHandler = async (req, res, userName) => {
+    const parsed = await readChannelMember(req);
+    if (typeof parsed === "string") return sendError(res, 400, parsed);
+    const { channel, user } = parsed;
+    if (!isUserRegistered(user)) return sendError(res, 404, `User "${user}" is not connected`);
+    if (getUserRole(user) === "human") return sendError(res, 400, "Humans already see every channel");
+    try {
+      joinChannel(channel, user);
+    } catch (e) {
+      return sendError(res, 404, (e as Error).message);
+    }
+    broadcast({ type: "channel_join", channel, userName: user, timestamp: Date.now() });
+    routeMessage("system", `@${user}`, `You have been added to ${channel} by ${userName}`, channel);
+    console.log(`[admin-channel-add] ${userName} added ${user} to ${channel}`);
+    sendJson(res, 200, { ok: true, channel, user });
+  };
+
+  const handleAdminChannelRemove: RouteHandler = async (req, res, userName) => {
+    const parsed = await readChannelMember(req);
+    if (typeof parsed === "string") return sendError(res, 400, parsed);
+    const { channel, user } = parsed;
+    if (channel === "#all") return sendError(res, 400, "Everyone stays in #all");
+    if (!isChannelMember(channel, user)) return sendError(res, 404, `"${user}" is not in ${channel}`);
+    leaveChannel(channel, user);
+    broadcast({ type: "channel_leave", channel, userName: user, timestamp: Date.now() });
+    if (isUserRegistered(user)) {
+      routeMessage("system", `@${user}`, `You have been removed from ${channel} by ${userName}`, "#all");
+    }
+    console.log(`[admin-channel-remove] ${userName} removed ${user} from ${channel}`);
+    sendJson(res, 200, { ok: true, channel, user });
+  };
+
   const handleAdminChannelDelete: RouteHandler = async (req, res) => {
     const body = JSON.parse(await readBody(req)) as { name?: string };
     if (!body.name || typeof body.name !== "string") {
@@ -776,6 +816,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     "/kick-all": { method: "POST", handler: handleKickAll },
     "/admin-send": { method: "POST", handler: handleAdminSend },
     "/admin-channel-create": { method: "POST", handler: handleAdminChannelCreate },
+    "/admin-channel-add": { method: "POST", handler: handleAdminChannelAdd },
+    "/admin-channel-remove": { method: "POST", handler: handleAdminChannelRemove },
     "/admin-channel-delete": { method: "POST", handler: handleAdminChannelDelete },
     "/admin-channel-describe": { method: "POST", handler: handleAdminChannelDescribe },
     "/admin-channel-history": { method: "GET", handler: handleAdminChannelHistory },

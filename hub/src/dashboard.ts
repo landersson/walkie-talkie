@@ -122,6 +122,28 @@ ${THEME_CSS}
     color: var(--text-tertiary);
     font-weight: 400;
   }
+  .member-remove {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    margin-left: 1px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 11px;
+    opacity: 0.5;
+  }
+  .member-remove:hover { color: var(--red); opacity: 1; }
+  .member-add {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 1px 8px;
+    background: transparent;
+    color: var(--text-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .member-add:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
   .clear-btn, .filter-btn {
     font-family: var(--mono);
     font-size: 11px;
@@ -1105,6 +1127,19 @@ ${LOGIN_DIALOG_HTML}
       </div>
     </div>
   </div>
+  <div class="dialog-overlay" id="member-dialog" style="display:none">
+    <div class="dialog">
+      <h2 id="member-dialog-title">Add agent</h2>
+      <label>Agent
+        <select id="member-dialog-agent"></select>
+      </label>
+      <span id="member-dialog-error" style="color:var(--red);font-size:11px;display:none"></span>
+      <div class="dialog-buttons">
+        <button class="btn-cancel" id="member-dialog-cancel">Cancel</button>
+        <button class="btn-save" id="member-dialog-save">Add</button>
+      </div>
+    </div>
+  </div>
   <div class="dialog-overlay" id="agent-dialog" style="display:none">
     <div class="dialog">
       <h2 id="agent-dialog-title">New Agent</h2>
@@ -1388,13 +1423,79 @@ ${LOGIN_SCRIPT}
         const chInfo = channels.get(selectedChannel);
         const members = chInfo ? chInfo.members : [];
         const count = members.length;
-        const names = members.join(", ");
-        membersHtml = count > 0
-          ? '<span class="channel-members">' + count + (count === 1 ? ' member' : ' members') + ': ' + names + '</span>'
-          : '<span class="channel-members">0 members</span>';
+        const names = members.map(m =>
+          escapeHtml(m) + '<button class="member-remove" data-member="' + escapeHtml(m) + '" title="Remove ' + escapeHtml(m) + ' from this channel">&times;</button>'
+        ).join(", ");
+        membersHtml = '<span class="channel-members">' + count + (count === 1 ? ' member' : ' members') +
+          (count > 0 ? ': ' + names : '') + '</span>' +
+          '<button class="member-add" title="Add an agent to this channel">+ Add agent</button>';
       }
-      channelHeaderEl.innerHTML = '<span>' + selectedChannel + '</span> — ' + membersHtml;
+      channelHeaderEl.innerHTML = '<span>' + escapeHtml(selectedChannel) + '</span> — ' + membersHtml;
+      const addBtn = channelHeaderEl.querySelector(".member-add");
+      if (addBtn) addBtn.onclick = () => openMemberDialog(selectedChannel);
+      for (const btn of channelHeaderEl.querySelectorAll(".member-remove")) {
+        btn.onclick = () => removeMember(selectedChannel, btn.dataset.member);
+      }
     }
+
+    // --- Channel members: humans see every channel, agents are added and removed here ---
+    const memberDialogEl = document.getElementById("member-dialog");
+    const memberDialogAgent = document.getElementById("member-dialog-agent");
+    const memberDialogError = document.getElementById("member-dialog-error");
+    let memberDialogChannel = "";
+
+    function showMemberError(text) {
+      memberDialogError.textContent = text;
+      memberDialogError.style.display = text ? "" : "none";
+    }
+
+    function openMemberDialog(channel) {
+      memberDialogChannel = channel;
+      const info = channels.get(channel);
+      const members = info ? info.members : [];
+      const candidates = [...users.keys()].filter(u => !isHuman(u) && !members.includes(u)).sort();
+      document.getElementById("member-dialog-title").textContent = "Add agent to " + channel;
+      memberDialogAgent.innerHTML = candidates
+        .map(u => '<option value="' + escapeHtml(u) + '">' + escapeHtml(u) + (users.get(u) ? "" : " (offline)") + '</option>')
+        .join("");
+      document.getElementById("member-dialog-save").disabled = candidates.length === 0;
+      showMemberError(candidates.length ? "" : "Every connected agent is already in " + channel + ".");
+      memberDialogEl.style.display = "flex";
+      memberDialogAgent.focus();
+    }
+
+    function closeMemberDialog() {
+      memberDialogEl.style.display = "none";
+    }
+
+    function postMember(route, channel, user) {
+      return fetch(route, { method: "POST", headers: adminHeaders, body: JSON.stringify({ channel, user }) })
+        .then(r => r.json())
+        .then(data => data.error || "")
+        .catch(() => "Could not reach the Hub");
+    }
+
+    function addMember() {
+      const user = memberDialogAgent.value;
+      if (!user) return;
+      postMember("admin-channel-add", memberDialogChannel, user).then(error => {
+        if (error) showMemberError(error);
+        else closeMemberDialog();
+      });
+    }
+
+    function removeMember(channel, user) {
+      if (!confirm("Remove " + user + " from " + channel + "?")) return;
+      postMember("admin-channel-remove", channel, user).then(error => { if (error) alert(error); });
+    }
+
+    document.getElementById("member-dialog-cancel").onclick = closeMemberDialog;
+    document.getElementById("member-dialog-save").onclick = addMember;
+    memberDialogEl.onclick = (e) => { if (e.target === memberDialogEl) closeMemberDialog(); };
+    memberDialogEl.onkeydown = (e) => {
+      if (e.key === "Escape") closeMemberDialog();
+      else if (e.key === "Enter") addMember();
+    };
 
     function markChannelRead(channel) {
       fetch("admin-mark-read", {

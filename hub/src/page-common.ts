@@ -70,7 +70,7 @@ export const DIALOG_CSS = `  .dialog-overlay {
     flex-direction: column;
     gap: 4px;
   }
-  .dialog input, .dialog textarea {
+  .dialog input, .dialog textarea, .dialog select {
     font-family: var(--mono);
     font-size: 13px;
     padding: 8px 10px;
@@ -81,7 +81,7 @@ export const DIALOG_CSS = `  .dialog-overlay {
     outline: none;
     transition: border-color 0.15s ease;
   }
-  .dialog input:focus, .dialog textarea:focus {
+  .dialog input:focus, .dialog textarea:focus, .dialog select:focus {
     border-color: var(--accent);
   }
   .dialog input::placeholder, .dialog textarea::placeholder {

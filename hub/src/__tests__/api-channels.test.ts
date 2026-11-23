@@ -244,3 +244,49 @@ describe("POST /send to a channel", () => {
     expect(messages).toEqual([]);
   });
 });
+
+describe("POST /admin-channel-add and /admin-channel-remove", () => {
+  const admin = (route: string, body: unknown) =>
+    fetch(`${ctx.baseUrl}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.adminToken}`, "X-Walkie-User": "alice" },
+      body: JSON.stringify(body),
+    });
+  const members = async (channel: string) => {
+    const res = await fetch(`${ctx.baseUrl}/channels`);
+    const { channels } = (await res.json()) as { channels: { name: string; members: string[] }[] };
+    return channels.find((c) => c.name === channel)?.members ?? [];
+  };
+
+  it("adds an agent to a channel and tells it", async () => {
+    const agent = await registerUser(ctx, "added-agent");
+    await admin("/admin-channel-create", { name: "added-room" });
+    const res = await admin("/admin-channel-add", { channel: "added-room", user: "@added-agent" });
+    expect(res.status).toBe(200);
+    expect(await members("#added-room")).toEqual(["added-agent"]);
+    const inbox = await fetch(`${ctx.baseUrl}/inbox`, { headers: { Authorization: `Bearer ${agent}` } });
+    const { messages } = (await inbox.json()) as { messages: { from: string; content: string }[] };
+    expect(messages).toContainEqual(
+      expect.objectContaining({ from: "system", content: "You have been added to #added-room by alice" }),
+    );
+  });
+
+  it("removes an agent from a channel", async () => {
+    await registerUser(ctx, "removed-agent");
+    await admin("/admin-channel-create", { name: "removed-room" });
+    await admin("/admin-channel-add", { channel: "#removed-room", user: "removed-agent" });
+    const res = await admin("/admin-channel-remove", { channel: "#removed-room", user: "removed-agent" });
+    expect(res.status).toBe(200);
+    expect(await members("#removed-room")).toEqual([]);
+  });
+
+  it("refuses unknown agents and channels, humans, and removing from #all", async () => {
+    await registerUser(ctx, "refused-agent");
+    await admin("/admin-channel-create", { name: "refused-room" });
+    expect((await admin("/admin-channel-add", { channel: "#refused-room", user: "nobody" })).status).toBe(404);
+    expect((await admin("/admin-channel-add", { channel: "#no-room", user: "refused-agent" })).status).toBe(404);
+    expect((await admin("/admin-channel-add", { channel: "#refused-room", user: "alice" })).status).toBe(400);
+    expect((await admin("/admin-channel-remove", { channel: "#all", user: "refused-agent" })).status).toBe(400);
+    expect((await admin("/admin-channel-remove", { channel: "#refused-room", user: "refused-agent" })).status).toBe(404);
+  });
+});
