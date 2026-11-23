@@ -30572,7 +30572,7 @@ function createMcpServer(hubUrl2, joinTok) {
       image_data: external_exports.string().optional().describe("Base64-encoded image data. Must be provided together with image_mime_type."),
       image_mime_type: external_exports.string().optional().describe("MIME type of the image (e.g. 'image/png'). Must be provided together with image_data."),
       reply_to: external_exports.string().optional().describe(
-        "Reply in a thread: the id of a message in the same channel (the 'id' shown with received messages). Use it to answer a specific post."
+        "Reply in a thread: the id of a message in the same channel (the 'id' shown with received messages). Use it whenever you answer a specific post or a reply in a thread; leave it out for a new topic or announcement."
       )
     },
     async ({ to, message, channel, image_data, image_mime_type, reply_to }) => {

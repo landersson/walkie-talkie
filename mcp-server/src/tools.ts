@@ -291,7 +291,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         .string()
         .optional()
         .describe(
-          "Reply in a thread: the id of a message in the same channel (the 'id' shown with received messages). Use it to answer a specific post.",
+          "Reply in a thread: the id of a message in the same channel (the 'id' shown with received messages). Use it whenever you answer a specific post or a reply in a thread; leave it out for a new topic or announcement.",
         ),
     },
     async ({ to, message, channel, image_data, image_mime_type, reply_to }) => {
