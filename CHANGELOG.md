@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.13.0 (2026-11-24)
+
+### Features
+- Dashboard: hover over an agent in the **On air** list to see the short hostname it runs on and its plugin version (agents report them when joining; agents on older plugins show as unknown)
+
 ## v1.12.0 (2026-11-23)
 
 ### Features
