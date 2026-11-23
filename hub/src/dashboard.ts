@@ -545,6 +545,46 @@ ${DIALOG_CSS}
     animation: slideIn 0.25s cubic-bezier(0.16,1,0.3,1);
     border: 1px solid transparent;
   }
+  /* Shared files (the project's scratch space) */
+  .msg-file {
+    margin-top: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-raised);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .file-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+    text-align: left;
+    word-break: break-all;
+  }
+  .file-link:hover { text-decoration: underline; }
+  .file-meta { color: var(--text-tertiary); }
+  #files-dialog .dialog { width: 680px; }
+  .files-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  .files-table th { text-align: left; font-weight: 500; color: var(--text-tertiary); padding: 4px 6px; }
+  .files-table td { padding: 5px 6px; border-top: 1px solid var(--border-subtle); color: var(--text-secondary); }
+  .files-list { max-height: 50vh; overflow-y: auto; }
+  .files-usage { font-size: 11px; color: var(--text-tertiary); }
+  .file-del {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .file-del:hover { color: var(--red); }
+  .upload-status { font-family: var(--mono); font-size: 12px; color: var(--text-secondary); }
   .msg .time {
     font-family: var(--mono);
     font-size: 13px;
@@ -1068,6 +1108,7 @@ ${DIALOG_CSS}
     <div class="header-spacer"></div>
     <span class="whoami" id="whoami"></span>
     <button class="filter-btn" id="switch-user-btn">Switch user</button>
+    <button class="filter-btn" id="files-btn" title="Files shared in this project (deleted automatically after a while)">Files</button>
     <button class="filter-btn" id="markdown-btn" title="Show agents' Markdown formatted (on) or as plain text (off)">Markdown</button>
     <button class="filter-btn" id="filter-btn">My messages</button>
     <button class="filter-btn" id="goto-last-btn" title="Scroll to the newest message">Go to last</button>
@@ -1100,8 +1141,8 @@ ${DIALOG_CSS}
           <div class="mention-popup" id="mention-popup"></div>
           <textarea id="send-input" placeholder="Send a message... (type @ to mention; paste or drop an image)" rows="1"></textarea>
         </div>
-        <button class="attach-btn" id="attach-btn" title="Attach an image (or paste or drop one)" aria-label="Attach an image"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
-        <input type="file" id="attach-input" accept="image/*" hidden>
+        <button class="attach-btn" id="attach-btn" title="Attach an image, or share any other file (or paste or drop one)" aria-label="Attach an image or share a file"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+        <input type="file" id="attach-input" hidden>
         <button class="send-btn" id="send-btn">Send</button>
       </div>
     </div>
@@ -1137,6 +1178,18 @@ ${LOGIN_DIALOG_HTML}
       <div class="dialog-buttons">
         <button class="btn-cancel" id="member-dialog-cancel">Cancel</button>
         <button class="btn-save" id="member-dialog-save">Add</button>
+      </div>
+    </div>
+  </div>
+  <div class="dialog-overlay" id="files-dialog" style="display:none">
+    <div class="dialog">
+      <h2>Shared files</h2>
+      <span class="files-usage" id="files-usage"></span>
+      <div class="files-list" id="files-list"></div>
+      <span id="files-error" style="color:var(--red);font-size:11px;display:none"></span>
+      <div class="dialog-buttons">
+        <button class="btn-cancel" id="files-close">Close</button>
+        <button class="btn-save" id="files-upload">Upload a file</button>
       </div>
     </div>
   </div>
@@ -1562,8 +1615,15 @@ ${LOGIN_SCRIPT}
         '<span class="channel-tag">' + (m.channel || "#all") + '</span>' +
         '<span class="from">' + m.from + '</span> ' +
         '<span class="to">&rarr; ' + m.to + '</span>' +
-        '<div class="content' + (markdownOn ? " md" : "") + '" data-raw="' + escapeHtml(m.content) + '">' + contentHtml(m.content) + '</div>' +
-        renderImageTag(m.image);
+        (m.content || !m.file ? '<div class="content' + (markdownOn ? " md" : "") + '" data-raw="' + escapeHtml(m.content) + '">' + contentHtml(m.content) + '</div>' : "") +
+        renderImageTag(m.image) +
+        renderFileTag(m.file);
+    }
+
+    function renderFileTag(file) {
+      if (!file) return "";
+      return '<div class="msg-file">&#128206; <button class="file-link" data-file-id="' + escapeHtml(file.id) + '" title="Download">' +
+        escapeHtml(file.name) + '</button><span class="file-meta">' + formatBytes(file.size) + '</span></div>';
     }
 
     // Agents write Markdown; the Markdown button switches between formatted and plain text
@@ -1801,7 +1861,7 @@ ${LOGIN_SCRIPT}
     // Attach an image file (pasted, dropped or picked) to the next message
     function attachImageFile(file) {
       if (!file.type.startsWith("image/")) {
-        showImageError(file.name + " is not an image. Only images can be attached.");
+        uploadFile(file);
         return;
       }
       resizeImage(file, MAX_IMAGE_SIZE, (base64, mimeType) => {
@@ -1861,6 +1921,131 @@ ${LOGIN_SCRIPT}
     attachInputEl.onchange = () => {
       if (attachInputEl.files.length) attachImageFile(attachInputEl.files[0]);
       attachInputEl.value = "";
+    };
+
+    // --- Shared files: the project's scratch space ---
+    function formatBytes(n) {
+      if (n < 1024) return n + " B";
+      const units = ["KB", "MB", "GB", "TB"];
+      let value = n / 1024;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+      return (value < 10 ? value.toFixed(1) : Math.round(value)) + " " + units[unit];
+    }
+
+    function formatExpiry(ts) {
+      const hours = Math.max(0, (ts - Date.now()) / 3600000);
+      return hours >= 48 ? Math.round(hours / 24) + " days" : hours >= 1 ? Math.round(hours) + " h" : "< 1 h";
+    }
+
+    let fileLimits = null; // { maxFile, quota, used, ttlMs } from the hub
+    function loadFiles() {
+      return fetch("admin-files", { headers: adminHeaders })
+        .then(r => r.json())
+        .then(data => {
+          fileLimits = data;
+          return data;
+        });
+    }
+
+    // Upload to the scratch space, announced in the open channel; progress shows under the messages
+    function uploadFile(file) {
+      const check = fileLimits ? Promise.resolve(fileLimits) : loadFiles();
+      check.then(limits => {
+        if (file.size === 0) return showImageError(file.name + " is empty.");
+        if (file.size > limits.maxFile) {
+          return showImageError(file.name + " is too large (" + formatBytes(file.size) + "; at most " + formatBytes(limits.maxFile) + ").");
+        }
+        const params = new URLSearchParams({ name: file.name, channel: selectedChannel || "#all", to: recipientTarget });
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "admin-file-upload?" + params);
+        for (const [k, v] of Object.entries(adminHeaders)) xhr.setRequestHeader(k, v);
+        xhr.setRequestHeader("Content-Type", "application/octet-stream");
+        const status = document.createElement("span");
+        status.className = "upload-status";
+        imagePreviewEl.appendChild(status);
+        imagePreviewEl.classList.add("active");
+        const done = (error) => {
+          status.remove();
+          if (!imagePreviewEl.children.length) imagePreviewEl.classList.remove("active");
+          if (error) showImageError(error);
+        };
+        xhr.upload.onprogress = (e) => {
+          const pct = e.lengthComputable ? Math.floor((100 * e.loaded) / e.total) + "%" : formatBytes(e.loaded);
+          status.textContent = "Uploading " + file.name + "... " + pct;
+        };
+        xhr.onload = () => {
+          let data = {};
+          try { data = JSON.parse(xhr.responseText); } catch {}
+          done(xhr.status === 200 ? "" : data.error || "Upload failed (" + xhr.status + ")");
+        };
+        xhr.onerror = () => done("Upload of " + file.name + " failed");
+        status.textContent = "Uploading " + file.name + "...";
+        xhr.send(file);
+      }).catch(() => showImageError("Could not reach the Hub"));
+    }
+
+    function downloadFile(id) {
+      fetch("admin-file-ticket", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id }) })
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) return alert(data.error);
+          const a = document.createElement("a");
+          a.href = data.url;
+          a.download = data.name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        })
+        .catch(() => alert("Could not reach the Hub"));
+    }
+
+    messagesEl.addEventListener("click", (e) => {
+      const link = e.target.closest(".file-link");
+      if (link) downloadFile(link.dataset.fileId);
+    });
+
+    const filesDialogEl = document.getElementById("files-dialog");
+    const filesListEl = document.getElementById("files-list");
+    function renderFilesDialog() {
+      loadFiles().then(data => {
+        const files = data.files || [];
+        document.getElementById("files-usage").textContent =
+          formatBytes(data.used) + " of " + formatBytes(data.quota) + " used. Files are deleted " +
+          Math.round(data.ttlMs / 86400000) + " days after upload; at most " + formatBytes(data.maxFile) + " each.";
+        filesListEl.innerHTML = files.length === 0
+          ? '<div class="files-usage">No files yet. Drop a file on the messages, or upload one here.</div>'
+          : '<table class="files-table"><tr><th>Name</th><th>Size</th><th>From</th><th>Channel</th><th>Expires in</th><th></th></tr>' +
+            files.map(f => '<tr><td><button class="file-link" data-file-id="' + escapeHtml(f.id) + '">' + escapeHtml(f.name) + '</button></td>' +
+              '<td>' + formatBytes(f.size) + '</td><td>' + escapeHtml(f.uploader) + '</td><td>' + escapeHtml(f.channel) + '</td>' +
+              '<td>' + formatExpiry(f.expiresAt) + '</td>' +
+              '<td><button class="file-del" data-file-id="' + escapeHtml(f.id) + '" title="Delete now">&times;</button></td></tr>').join("") +
+            '</table>';
+      }).catch(() => {});
+    }
+    filesListEl.addEventListener("click", (e) => {
+      const link = e.target.closest(".file-link");
+      if (link) return downloadFile(link.dataset.fileId);
+      const del = e.target.closest(".file-del");
+      if (!del || !confirm("Delete this file for everyone?")) return;
+      fetch("admin-file-delete", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: del.dataset.fileId }) })
+        .then(r => r.json())
+        .then(data => { if (data.error) alert(data.error); })
+        .catch(() => {});
+    });
+    document.getElementById("files-btn").onclick = () => {
+      filesDialogEl.style.display = "flex";
+      renderFilesDialog();
+    };
+    const closeFilesDialog = () => { filesDialogEl.style.display = "none"; };
+    document.getElementById("files-close").onclick = closeFilesDialog;
+    filesDialogEl.onclick = (e) => { if (e.target === filesDialogEl) closeFilesDialog(); };
+    filesDialogEl.onkeydown = (e) => { if (e.key === "Escape") closeFilesDialog(); };
+    document.getElementById("files-upload").onclick = () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.onchange = () => { if (input.files.length) uploadFile(input.files[0]); };
+      input.click();
     };
 
     let mentionActive = false;
@@ -2387,6 +2572,9 @@ ${LOGIN_SCRIPT}
             unreadCounts[msgChannel] = (unreadCounts[msgChannel] || 0) + 1;
             renderChannels();
           }
+        } else if (ev.type === "files_change") {
+          fileLimits = null;
+          if (filesDialogEl.style.display !== "none") renderFilesDialog();
         } else if (ev.type === "channel_create") {
           refreshChannels();
           addMessage(

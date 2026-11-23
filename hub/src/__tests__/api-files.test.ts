@@ -21,7 +21,7 @@ function upload(token: string, name: string, body: Buffer, query: Record<string,
   return fetch(`${ctx.baseUrl}/${admin ? "admin-file-upload" : "file-upload"}?${params}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
-    body,
+    body: new Uint8Array(body),
   });
 }
 const post = (token: string, route: string, body: unknown) =>
