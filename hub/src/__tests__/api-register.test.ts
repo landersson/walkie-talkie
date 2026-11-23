@@ -27,6 +27,25 @@ describe("POST /register", () => {
     expect(body.token).toBeTruthy();
   });
 
+  it("keeps the host and plugin version an agent reports, cleaned up", async () => {
+    const join = (name: string, client: unknown) =>
+      fetch(`${ctx.baseUrl}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.joinToken}` },
+        body: JSON.stringify({ name, client }),
+      });
+    expect((await join("reg-host", { host: " zeus\u0007 ", version: "1.13.0", extra: "x" })).status).toBe(200);
+    expect((await join("reg-nohost", "not an object")).status).toBe(200);
+    expect((await join("reg-long", { host: "h".repeat(200) })).status).toBe(200);
+    const { users } = (await (await fetch(`${ctx.baseUrl}/users`)).json()) as {
+      users: { name: string; client?: { host?: string; version?: string } }[];
+    };
+    const client = (name: string) => users.find((u) => u.name === name)?.client;
+    expect(client("reg-host")).toEqual({ host: "zeus", version: "1.13.0" });
+    expect(client("reg-nohost")).toBeUndefined();
+    expect(client("reg-long")?.host).toHaveLength(64);
+  });
+
   it("should reject duplicate registration", async () => {
     await registerUser(ctx, "reg-dup");
     const res = await fetch(`${ctx.baseUrl}/register`, {

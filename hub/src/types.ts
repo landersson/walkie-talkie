@@ -42,17 +42,27 @@ export interface Message {
 
 export type UserRole = "agent" | "bridge" | "human";
 
+/** Where an agent runs, as its MCP server reports it when joining (shown on the dashboard). */
+export interface ClientInfo {
+  /** Short hostname */
+  host?: string;
+  /** Walkie-Talkie plugin version */
+  version?: string;
+}
+
 export interface User {
   name: string;
   token: string;
   role: UserRole;
   registeredAt: number;
+  client?: ClientInfo;
 }
 
 export interface RegisterRequest {
   name: string;
   oldToken?: string;
   role?: UserRole;
+  client?: ClientInfo;
 }
 
 export interface RegisterResponse {

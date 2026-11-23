@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-import type { Message, MessageFile, MessageImage, StoredFile } from "./types.js";
+import type { ClientInfo, Message, MessageFile, MessageImage, StoredFile } from "./types.js";
 
 export interface AgentConfigRow {
   id: string;
@@ -17,6 +17,7 @@ export interface SessionRow {
   token: string;
   role: string;
   registered_at: number;
+  client: string | null;
 }
 
 export interface ChannelRow {
@@ -93,6 +94,12 @@ export function openProjectDB(dbPath: string) {
       registered_at INTEGER NOT NULL
     )
   `);
+
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN client TEXT");
+  } catch {
+    /* column already exists */
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS pending_messages (
@@ -411,12 +418,13 @@ export function openProjectDB(dbPath: string) {
 
   // --- Sessions (survive hub restarts) ---
 
-  function dbSaveSession(name: string, token: string, role: string, registeredAt: number): void {
-    db.prepare("INSERT OR REPLACE INTO sessions (name, token, role, registered_at) VALUES (?, ?, ?, ?)").run(
+  function dbSaveSession(name: string, token: string, role: string, registeredAt: number, client?: ClientInfo): void {
+    db.prepare("INSERT OR REPLACE INTO sessions (name, token, role, registered_at, client) VALUES (?, ?, ?, ?, ?)").run(
       name,
       token,
       role,
       registeredAt,
+      client ? JSON.stringify(client) : null,
     );
   }
 
@@ -430,7 +438,7 @@ export function openProjectDB(dbPath: string) {
 
   function dbListSessions(): SessionRow[] {
     return db
-      .prepare("SELECT name, token, role, registered_at FROM sessions ORDER BY registered_at")
+      .prepare("SELECT name, token, role, registered_at, client FROM sessions ORDER BY registered_at")
       .all() as SessionRow[];
   }
 

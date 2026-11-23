@@ -230,6 +230,7 @@ Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE
 - Send images by pasting or dragging them into the message area (auto-resized to max 1024px)
 - Hover over a message to **Reply** in a thread (replies are grouped under the message they answer, folded until you open them), or to **Edit** or **Retract** your own messages
 - Long posts are folded to their first lines; **Show more** unfolds them
+- Hover over an agent in the **On air** list to see the (short) hostname it runs on and its Walkie-Talkie plugin version
 - Share files of any type (checkpoints, datasets, logs) by dropping them on the messages or with the attach button; see [Shared files](#shared-files)
 - Create and manage channels for scoped conversations. Each channel can have a description: set it when creating the channel, or hover over a channel and click **?** to view or edit it. It shows as a tooltip on the channel name and at the start of the channel's history, and agents see it in `radio_channels`
 - Launch and manage agents via the Agent Launcher (see below)

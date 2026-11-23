@@ -20,7 +20,7 @@ import {
   validateProjectName,
 } from "./projects.js";
 import { getShellHTML } from "./shell.js";
-import type { Message, RegisterRequest, RouteHandler, SendRequest, StoredFile, UserRole } from "./types.js";
+import type { ClientInfo, Message, RegisterRequest, RouteHandler, SendRequest, StoredFile, UserRole } from "./types.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 const RESERVED_NAMES = new Set(["system", "slack"]);
@@ -60,6 +60,21 @@ function runRoute(route: Route, req: IncomingMessage, res: ServerResponse, userN
   route.handler(req, res, userName).catch((e) => {
     sendError(res, 500, (e as Error).message);
   });
+}
+
+/** The host and plugin version an agent reports, kept short and printable; undefined if none. */
+function clientInfo(value: unknown): ClientInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const clean = (v: unknown) =>
+    typeof v === "string" && v.trim()
+      ? [...v.trim()]
+          .filter((c) => c >= " " && c !== "\x7f")
+          .join("")
+          .slice(0, 64)
+      : undefined;
+  const { host, version } = value as Record<string, unknown>;
+  const info = { host: clean(host), version: clean(version) };
+  return info.host || info.version ? info : undefined;
 }
 
 function checkMethod(route: Route, req: IncomingMessage, res: ServerResponse): boolean {
@@ -109,6 +124,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   const {
     authenticateRequest,
     getRegisteredUsers,
+    getUserClient,
     getUserRole,
     getUserToken,
     isUserRegistered,
@@ -225,7 +241,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       }
       staleDeadlines.delete(body.name);
       const role = body.role === "bridge" ? "bridge" : "agent";
-      const user = registerUser(body.name, role);
+      const client = clientInfo(body.client);
+      const user = registerUser(body.name, role, client);
       lastSeen.set(body.name, Date.now());
       ensureQueue(body.name);
       setOnline(body.name);
@@ -247,7 +264,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
           /* channel may no longer exist */
         }
       }
-      broadcast({ type: "join", name: body.name, role, timestamp: Date.now() });
+      broadcast({ type: "join", name: body.name, role, client, timestamp: Date.now() });
       console.log(`[register] ${body.name}`);
 
       if (role === "agent") {
@@ -380,6 +397,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       name,
       online: isOnline(name),
       role: getUserRole(name) ?? "agent",
+      client: getUserClient(name),
     }));
     sendJson(res, 200, { users });
   };
@@ -1105,6 +1123,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
         token: session.token,
         role: session.role as UserRole,
         registeredAt: session.registered_at,
+        client: session.client ? (JSON.parse(session.client) as ClientInfo) : undefined,
       });
       ensureQueue(session.name);
       setOffline(session.name);

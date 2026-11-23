@@ -22180,7 +22180,7 @@ var StdioServerTransport = class {
 import fs2 from "node:fs";
 import http2 from "node:http";
 import https2 from "node:https";
-import os from "node:os";
+import os2 from "node:os";
 import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30101,7 +30101,17 @@ var EMPTY_COMPLETION_RESULT = {
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import os from "node:os";
 import path from "node:path";
+function clientInfo() {
+  let version2;
+  try {
+    const manifest = new URL("../.claude-plugin/plugin.json", import.meta.url);
+    version2 = JSON.parse(fs.readFileSync(manifest, "utf8")).version;
+  } catch {
+  }
+  return { host: os.hostname().split(".")[0], version: version2 };
+}
 var CONNECT_RETRY_MS = 15e3;
 var FILE_IDLE_TIMEOUT_MS = 12e4;
 var CONNECT_TIMEOUT_MS = 1e4;
@@ -30316,7 +30326,10 @@ var HubClient = class {
     return res.data;
   }
   async register(name, joinToken3, oldToken) {
-    const body = { name };
+    const body = {
+      name,
+      client: clientInfo()
+    };
     if (oldToken) body.oldToken = oldToken;
     const res = await this.request({
       method: "POST",
@@ -30523,7 +30536,7 @@ var joinToken;
 var currentToken = null;
 var currentName = null;
 var SESSIONS_FILE = path2.join(
-  process.env.XDG_STATE_HOME || path2.join(os.homedir(), ".local", "state"),
+  process.env.XDG_STATE_HOME || path2.join(os2.homedir(), ".local", "state"),
   "walkie-talkie",
   "mcp-sessions.json"
 );

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Channels } from "./channels.js";
 import type { ProjectDB } from "./db.js";
-import type { User, UserRole } from "./types.js";
+import type { ClientInfo, User, UserRole } from "./types.js";
 
 export function createAuth(db: ProjectDB, channels: Channels) {
   const { dbDeleteSession, dbSaveSession } = db;
@@ -14,16 +14,16 @@ export function createAuth(db: ProjectDB, channels: Channels) {
     return users.get(name)?.token ?? null;
   }
 
-  function registerUser(name: string, role: UserRole = "agent"): User {
+  function registerUser(name: string, role: UserRole = "agent", client?: ClientInfo): User {
     if (users.has(name)) {
       throw new Error(`User "${name}" is already registered`);
     }
     const token = randomBytes(32).toString("hex");
-    const user: User = { name, token, role, registeredAt: Date.now() };
+    const user: User = { name, token, role, registeredAt: Date.now(), client };
     users.set(name, user);
     tokenToName.set(token, name);
     // Agents and bridges keep their token across hub restarts; humans re-register on reconnect
-    if (role !== "human") dbSaveSession(name, token, role, user.registeredAt);
+    if (role !== "human") dbSaveSession(name, token, role, user.registeredAt, client);
     return user;
   }
 
@@ -54,6 +54,10 @@ export function createAuth(db: ProjectDB, channels: Channels) {
     return Array.from(users.keys());
   }
 
+  function getUserClient(name: string): ClientInfo | undefined {
+    return users.get(name)?.client;
+  }
+
   function getUserRole(name: string): UserRole | null {
     return users.get(name)?.role ?? null;
   }
@@ -75,6 +79,7 @@ export function createAuth(db: ProjectDB, channels: Channels) {
     unregisterUser,
     authenticateRequest,
     getRegisteredUsers,
+    getUserClient,
     getUserRole,
     getUsersByRole,
     isUserRegistered,

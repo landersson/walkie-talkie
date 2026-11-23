@@ -1,7 +1,23 @@
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import os from "node:os";
 import path from "node:path";
+
+/**
+ * Where this MCP server runs, shown when hovering over the agent on the dashboard: the short
+ * hostname and the version of the installed plugin (read from its manifest next to the bundle).
+ */
+function clientInfo(): { host: string; version?: string } {
+  let version: string | undefined;
+  try {
+    const manifest = new URL("../.claude-plugin/plugin.json", import.meta.url);
+    version = (JSON.parse(fs.readFileSync(manifest, "utf8")) as { version?: string }).version;
+  } catch {
+    /* not running from the plugin (e.g. in development) */
+  }
+  return { host: os.hostname().split(".")[0], version };
+}
 
 interface RequestOptions {
   method: string;
@@ -270,7 +286,10 @@ export class HubClient {
   }
 
   async register(name: string, joinToken: string, oldToken?: string): Promise<{ token: string; name: string }> {
-    const body: { name: string; oldToken?: string } = { name };
+    const body: { name: string; oldToken?: string; client: { host: string; version?: string } } = {
+      name,
+      client: clientInfo(),
+    };
     if (oldToken) body.oldToken = oldToken;
     const res = await this.request<{ token: string; name: string }>({
       method: "POST",

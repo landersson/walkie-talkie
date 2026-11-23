@@ -1334,6 +1334,7 @@ ${LOGIN_SCRIPT}
     const channelHeaderEl = document.getElementById("channel-header");
     const users = new Map(); // name -> online (boolean)
     const humans = new Set(); // names of dashboard users (role "human")
+    const clients = new Map(); // agent name -> { host, version } its MCP server reported
     let MY_NAME = "";
 
     // "operator" predates the human role, so its old messages count as human too
@@ -1442,6 +1443,7 @@ ${LOGIN_SCRIPT}
         info.innerHTML = '<span class="' + dotCls + '"></span><span class="user-name">' + u + '</span>' + humanHtml + typingHtml;
         li.appendChild(info);
         if (!isHuman(u)) {
+          li.title = clientTooltip(u);
           const btn = document.createElement("button");
           btn.className = "kick-btn";
           btn.textContent = "kick";
@@ -1456,6 +1458,13 @@ ${LOGIN_SCRIPT}
         if (!users.has(targetName)) setRecipient("@all");
       }
       updateChannelHeader();
+    }
+
+    // Hovering an agent shows where it runs and which plugin it uses (reported when it joined)
+    function clientTooltip(name) {
+      const c = clients.get(name);
+      if (!c) return name + "\\nHost and plugin version unknown (plugin older than 1.13.0)";
+      return name + "\\nHost: " + (c.host || "unknown") + "\\nPlugin: " + (c.version ? "v" + c.version : "unknown");
     }
 
     function renderAgents() {
@@ -2778,6 +2787,7 @@ ${LOGIN_SCRIPT}
         for (const u of data.users) {
           users.set(u.name, u.online);
           if (u.role === "human") humans.add(u.name);
+          if (u.client) clients.set(u.name, u.client);
         }
         renderUsers();
       }).catch(() => {});
@@ -2826,6 +2836,8 @@ ${LOGIN_SCRIPT}
           }
         } else if (ev.type === "join") {
           if (ev.role === "human") humans.add(ev.name);
+          if (ev.client) clients.set(ev.name, ev.client);
+          else clients.delete(ev.name);
           // Humans come online when their dashboard connects (a status event follows)
           users.set(ev.name, ev.role !== "human");
           renderUsers();
@@ -2840,6 +2852,7 @@ ${LOGIN_SCRIPT}
         } else if (ev.type === "leave") {
           users.delete(ev.name);
           humans.delete(ev.name);
+          clients.delete(ev.name);
           renderUsers();
           renderAgents();
           refreshChannels();

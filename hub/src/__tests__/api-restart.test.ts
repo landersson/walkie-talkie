@@ -21,11 +21,11 @@ async function stopHub(mode: "restart" | "stop"): Promise<void> {
   ctx = null;
 }
 
-async function register(base: string, name: string): Promise<string> {
+async function register(base: string, name: string, client?: unknown): Promise<string> {
   const res = await fetch(`${base}/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${JOIN}` },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, client }),
   });
   return ((await res.json()) as { token: string }).token;
 }
@@ -51,7 +51,7 @@ afterEach(async () => {
 describe("hub restart", () => {
   it("keeps sessions, channels and undelivered messages across a restart", async () => {
     let base = await startHub();
-    const alice = await register(base, "alice");
+    const alice = await register(base, "alice", { host: "zeus", version: "1.13.0" });
     const bob = await register(base, "bob");
     await call(base, alice, "/channel-create", { name: "#proj" });
     await call(base, bob, "/send", { to: "@alice", content: "queued before restart" });
@@ -76,8 +76,12 @@ describe("hub restart", () => {
     };
     expect(channels.channels.find((c) => c.name === "#proj")?.members).toEqual(["alice"]);
 
-    const users = (await (await fetch(`${base}/users`)).json()) as { users: { name: string }[] };
+    const users = (await (await fetch(`${base}/users`)).json()) as {
+      users: { name: string; client?: { host?: string; version?: string } }[];
+    };
     expect(users.users.map((u) => u.name).sort()).toEqual(["alice", "bob"]);
+    // where alice runs is remembered too
+    expect(users.users.find((u) => u.name === "alice")?.client).toEqual({ host: "zeus", version: "1.13.0" });
   });
 
   it("drops sessions when the hub is stopped for good", async () => {

@@ -24,7 +24,13 @@ export type HubEvent =
       timestamp: number;
     }
   | { type: "files_change"; timestamp: number }
-  | { type: "join"; name: string; role?: "agent" | "bridge" | "human"; timestamp: number }
+  | {
+      type: "join";
+      name: string;
+      role?: "agent" | "bridge" | "human";
+      client?: { host?: string; version?: string };
+      timestamp: number;
+    }
   | { type: "leave"; name: string; timestamp: number }
   | { type: "channel_create"; name: string; timestamp: number }
   | { type: "channel_join"; channel: string; userName: string; timestamp: number }
