@@ -46,8 +46,9 @@ function sendError(res: ServerResponse, status: number, message: string): void {
 function authenticateBearer(req: IncomingMessage, expected: string): boolean {
   const auth = req.headers.authorization;
   if (!auth) return false;
-  const [scheme, token] = auth.split(" ");
-  return scheme === "Bearer" && token === expected;
+  // The whole rest must match: a token pasted with extra text must fail here too, as it does on
+  // the live streams, or a dashboard would log in and then get no live updates
+  return auth === `Bearer ${expected}`;
 }
 
 type Route = { method: string; handler: RouteHandler };

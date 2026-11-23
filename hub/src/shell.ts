@@ -417,7 +417,11 @@ ${LOGIN_SCRIPT}
         }
       };
       // EventSource reconnects by itself; after a hub restart, catch up on what changed
-      es.onerror = () => setStreamOpen(false);
+      es.onerror = () => {
+        setStreamOpen(false);
+        // Closed for good means the hub refused it (e.g. the admin token changed): log in again
+        if (es.readyState === EventSource.CLOSED) refuseLogin("The Hub refused the live stream: log in again");
+      };
       es.onopen = () => {
         setStreamOpen(true);
         if (!opened) { opened = true; return; }

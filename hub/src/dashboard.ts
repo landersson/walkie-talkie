@@ -2767,7 +2767,10 @@ ${LOGIN_SCRIPT}
         const es = new EventSource("events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
         es.onmessage = (e) => handleEvent(JSON.parse(e.data));
         es.onopen = () => showConnected(true);
-        es.onerror = () => showConnected(false);
+        es.onerror = () => {
+          showConnected(false);
+          if (es.readyState === EventSource.CLOSED) refuseLogin("The Hub refused the live stream: log in again");
+        };
       }
     }
 

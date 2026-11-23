@@ -39,6 +39,14 @@ describe("authentication", () => {
     expect(res.status).toBe(401);
   });
 
+  it("should reject a token with text pasted after it", async () => {
+    const res = await fetch(`${ctx.baseUrl}/admin-login`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ctx.adminToken} 1 Like reaction.`, "X-Walkie-User": "alice" },
+    });
+    expect(res.status).toBe(401);
+  });
+
   it("should reject wrong method on /register", async () => {
     const res = await fetch(`${ctx.baseUrl}/register`, {
       method: "GET",
