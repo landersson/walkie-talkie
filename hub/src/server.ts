@@ -5,7 +5,7 @@ import path from "node:path";
 import { channelName } from "./channels.js";
 import { getDashboardHTML } from "./dashboard.js";
 import type { AgentConfigRow } from "./db.js";
-import { createEventStream } from "./events.js";
+import { createEventStream, type HubEvent } from "./events.js";
 import { launchAgent } from "./launcher.js";
 import { createProject, type Project } from "./project.js";
 import {
@@ -1145,7 +1145,11 @@ type HubWideEvent =
   | { type: "project_create"; name: string; timestamp: number }
   | { type: "project_archive"; name: string; timestamp: number }
   | { type: "activity"; project: string; channel: string; from: string; timestamp: number }
-  | { type: "read"; project: string; userName: string; channel: string; timestamp: number };
+  | { type: "read"; project: string; userName: string; channel: string; timestamp: number }
+  /** The first event of each stream: the id to choose its projects with (/admin-hub-stream). */
+  | { type: "hello"; stream: string }
+  /** An event of a project the stream's page has open. */
+  | { type: "project_event"; project: string; event: HubEvent };
 
 export interface HubOptions {
   /** Database of the default project (default: $WALKIE_TALKIE_DB_PATH or ./walkie-talkie.db). */
@@ -1208,11 +1212,17 @@ export function createHubServer(
     app.connectHuman(presence.name);
     presence.apps.add(app);
   }
+  // A browser opens at most 6 connections to a server, so the project tabs page keeps one stream
+  // for everything: hub-wide events, plus the events of the projects it has open
+  const hubStreams = new Map<string, { res: ServerResponse; projects: Set<string> }>();
   let shuttingDown = false;
 
   function openProject(name: string, file: string): ProjectApp {
     const app = createProjectApp(createProject(name, file), adminToken, joinToken);
     app.project.events.subscribe((ev) => {
+      for (const stream of hubStreams.values()) {
+        if (stream.projects.has(name)) events.send(stream.res, { type: "project_event", project: name, event: ev });
+      }
       if (ev.type === "message") {
         events.broadcast({
           type: "activity",
@@ -1285,16 +1295,30 @@ export function createHubServer(
     sendJson(res, 200, { ok: true, project: name, archivedAs });
   }
 
+  /** Chooses the projects whose events a hub-wide stream carries (the projects its page has open). */
+  async function handleHubStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = JSON.parse((await readBody(req)) || "{}") as { stream?: unknown; projects?: unknown };
+    const stream = typeof body.stream === "string" ? hubStreams.get(body.stream) : undefined;
+    if (!stream) return sendError(res, 404, "No such stream");
+    const wanted = Array.isArray(body.projects) ? body.projects : [];
+    stream.projects = new Set(wanted.filter((p): p is string => typeof p === "string" && apps.has(p)));
+    sendJson(res, 200, { ok: true, projects: [...stream.projects] });
+  }
+
   function handleHubEvents(url: URL, res: ServerResponse) {
     const name = streamHuman(url, res, adminToken, defaultApp ? defaultApp.ensureHuman : humanNameError);
     if (!name) return;
     const presence = { name, apps: new Set<ProjectApp>() };
     for (const app of apps.values()) attachPresence(presence, app);
     hubPresences.add(presence);
+    const stream = randomUUID();
+    hubStreams.set(stream, { res, projects: new Set() });
     events.addSSEClient(res, () => {
+      hubStreams.delete(stream);
       hubPresences.delete(presence);
       for (const app of presence.apps) app.disconnectHuman(name);
     });
+    events.send(res, { type: "hello", stream });
   }
 
   /** Routes that concern the hub as a whole rather than one project (admin token). */
@@ -1302,6 +1326,7 @@ export function createHubServer(
     "/projects": { method: "GET", handler: async (_req, res) => sendJson(res, 200, { projects: listProjects() }) },
     "/admin-project-create": { method: "POST", handler: handleProjectCreate },
     "/admin-project-archive": { method: "POST", handler: handleProjectArchive },
+    "/admin-hub-stream": { method: "POST", handler: handleHubStream },
   };
   // The project tabs page logs in here; with a default project, that project checks the name
   if (!defaultApp) {

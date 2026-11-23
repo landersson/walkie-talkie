@@ -2630,11 +2630,7 @@ ${LOGIN_SCRIPT}
         if (paneActive) markChannelRead(selectedChannel);
       });
 
-      const es = new EventSource("events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
-
-      es.onmessage = (e) => {
-        const ev = JSON.parse(e.data);
-
+      function handleEvent(ev) {
         if (ev.type === "status") {
           if (users.has(ev.name)) {
             users.set(ev.name, ev.online);
@@ -2751,17 +2747,28 @@ ${LOGIN_SCRIPT}
           renderUsers();
           renderTypingBar();
         }
-      };
+      }
 
-      es.onopen = () => {
-        statusEl.textContent = "connected";
-        statusEl.className = "";
-      };
+      function showConnected(open) {
+        statusEl.textContent = open ? "connected" : "disconnected";
+        statusEl.className = open ? "" : "disconnected";
+      }
 
-      es.onerror = () => {
-        statusEl.textContent = "disconnected";
-        statusEl.className = "disconnected";
-      };
+      if (EMBEDDED) {
+        // The tabs page keeps one live stream for all its projects (a browser opens only
+        // 6 connections to a server) and passes this project's events on
+        window.addEventListener("message", (e) => {
+          if (e.origin !== location.origin || e.source !== parent || !e.data) return;
+          if (e.data.type === "walkie-event") handleEvent(e.data.event);
+          else if (e.data.type === "walkie-stream") showConnected(e.data.open);
+        });
+        parent.postMessage({ type: "walkie-ready" }, location.origin);
+      } else {
+        const es = new EventSource("events?token=" + encodeURIComponent(ADMIN_TOKEN) + "&name=" + encodeURIComponent(MY_NAME));
+        es.onmessage = (e) => handleEvent(JSON.parse(e.data));
+        es.onopen = () => showConnected(true);
+        es.onerror = () => showConnected(false);
+      }
     }
 
     function onLoggedIn() {

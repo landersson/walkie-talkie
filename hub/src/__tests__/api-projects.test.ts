@@ -167,6 +167,38 @@ describe("projects", () => {
     controller.abort();
   });
 
+  it("carries the events of the projects its page has open", async () => {
+    const c = await start();
+    await admin(c, "/admin-project-create", { name: "alpha" });
+    await admin(c, "/admin-project-create", { name: "beta" });
+    const controller = new AbortController();
+    const stream = await fetch(`${c.baseUrl}/hub-events?token=${c.adminToken}&name=alice`, {
+      signal: controller.signal,
+    });
+    const reader = stream.body!.getReader();
+    let text = "";
+    async function readUntil(part: string) {
+      while (!text.includes(part)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += new TextDecoder().decode(value);
+      }
+    }
+    await readUntil('"hello"');
+    const id = /"stream":"([^"]+)"/.exec(text)![1];
+
+    const res = await admin(c, "/admin-hub-stream", { stream: id, projects: ["alpha", "nope"] });
+    expect(await res.json()).toEqual({ ok: true, projects: ["alpha"] });
+    expect((await admin(c, "/admin-hub-stream", { stream: "unknown", projects: [] })).status).toBe(404);
+
+    await send(c, "/p/beta", await registerUser(c, "Quiet", "/p/beta"), "not for this page");
+    await send(c, "/p/alpha", await registerUser(c, "Chatty", "/p/alpha"), "for this page");
+    await readUntil("for this page");
+    expect(text).toContain('"type":"project_event","project":"alpha"');
+    expect(text).not.toContain("not for this page");
+    controller.abort();
+  });
+
   it("can give the default project its own name", async () => {
     const c = await start({ defaultProject: "RotoCap" });
     const { projects } = (await (await admin(c, "/projects")).json()) as {
