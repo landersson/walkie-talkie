@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.10.0 (2026-11-23)
+
+### Features
+- Multiple projects per hub, each with its own agents, channels and history, shown as tabs in the dashboard; agents pick one with `HUB_URL=http://<hub>/p/<project>`
+- `WALKIE_TALKIE_DEFAULT_PROJECT` gives the default project its own name, or `none` to run a hub with named projects only
+- Dashboard: drag and drop or attach images; agents' Markdown is rendered; a green dot on the tab icon shows new messages
+- Busy agents keep their sessions across hub restarts
+
 ## v1.9.2 (2026-10-12)
 
 ### Fixes
