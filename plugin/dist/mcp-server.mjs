@@ -30336,13 +30336,11 @@ var HubClient = class {
       token
     });
   }
-  async send(token, to, content, channel, image) {
-    const body = {
-      to,
-      content
-    };
+  async send(token, to, content, channel, image, replyTo) {
+    const body = { to, content };
     if (channel) body.channel = channel;
     if (image) body.image = image;
+    if (replyTo) body.replyTo = replyTo;
     const res = await this.request({
       method: "POST",
       path: "/send",
@@ -30351,6 +30349,19 @@ var HubClient = class {
     });
     if (res.status !== 200) {
       throw new Error(res.data.error ?? "Send failed");
+    }
+    return res.data;
+  }
+  /** Change (content given) or retract (no content) one of your own messages. */
+  async changeMessage(token, id, channel, content) {
+    const res = await this.request({
+      method: "POST",
+      path: content === void 0 ? "/message-retract" : "/message-edit",
+      token,
+      body: { id, channel, content }
+    });
+    if (res.status !== 200) {
+      throw new Error(res.data.error ?? "Request failed");
     }
     return res.data;
   }
@@ -30478,6 +30489,12 @@ function fileTag(file2) {
 function textResult(text, isError = false) {
   return { content: [{ type: "text", text }], ...isError ? { isError: true } : {} };
 }
+var SHORT_ID = 8;
+function messageLine(m) {
+  const ids = m.id ? ` [id ${m.id.slice(0, SHORT_ID)}${m.replyTo ? `, reply to ${m.replyTo.slice(0, SHORT_ID)}` : ""}]` : "";
+  const attached = (m.image ? " [image attached]" : "") + fileTag(m.file);
+  return `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} \u2192 ${m.to}${ids}: ${m.content}${attached}`;
+}
 function getMimeType(source) {
   const ext = path2.extname(source).toLowerCase();
   return MIME_TYPES[ext] ?? "image/png";
@@ -30603,6 +30620,19 @@ async function waitForMessages(timeoutSec, signal) {
   if (!currentToken) return "signed-off";
   return reconnecting ? "unreachable" : [];
 }
+async function changeOwnMessage(id, channel, content) {
+  if (!currentToken) {
+    return { content: [{ type: "text", text: "Not on the air. Use radio_join first." }], isError: true };
+  }
+  try {
+    await client.changeMessage(currentToken, id, channel, content);
+    return {
+      content: [{ type: "text", text: `Message ${id} ${content === void 0 ? "retracted" : "edited"}` }]
+    };
+  } catch (e) {
+    return { content: [{ type: "text", text: `Failed: ${e.message}` }], isError: true };
+  }
+}
 function createMcpServer(hubUrl2, joinTok) {
   client = new HubClient(hubUrl2);
   joinToken = joinTok;
@@ -30656,9 +30686,12 @@ function createMcpServer(hubUrl2, joinTok) {
         "Channel to send to. IMPORTANT: Always reply in the same channel where you received the message. Defaults to #all if omitted."
       ),
       image_data: external_exports.string().optional().describe("Base64-encoded image data. Must be provided together with image_mime_type."),
-      image_mime_type: external_exports.string().optional().describe("MIME type of the image (e.g. 'image/png'). Must be provided together with image_data.")
+      image_mime_type: external_exports.string().optional().describe("MIME type of the image (e.g. 'image/png'). Must be provided together with image_data."),
+      reply_to: external_exports.string().optional().describe(
+        "Reply in a thread: the id of a message in the same channel (the 'id' shown with received messages). Use it whenever you answer a specific post or a reply in a thread; leave it out for a new topic or announcement."
+      )
     },
-    async ({ to, message, channel, image_data, image_mime_type }) => {
+    async ({ to, message, channel, image_data, image_mime_type, reply_to }) => {
       if (!currentToken) {
         return {
           content: [{ type: "text", text: "Not on the air. Use radio_join first." }],
@@ -30667,12 +30700,12 @@ function createMcpServer(hubUrl2, joinTok) {
       }
       try {
         const image = image_data && image_mime_type ? { data: image_data, mimeType: image_mime_type } : void 0;
-        const result = await client.send(currentToken, to, message, channel, image);
+        const result = await client.send(currentToken, to, message, channel, image, reply_to);
         return {
           content: [
             {
               type: "text",
-              text: `Message sent to ${result.to} in ${channel || "#all"} (id: ${result.id})`
+              text: `Message sent to ${result.to} in ${channel || "#all"} (id: ${result.id.slice(0, SHORT_ID)})`
             }
           ]
         };
@@ -30746,6 +30779,25 @@ ${formatBytes(used)} of ${formatBytes(quota)} used`);
         return textResult(`Listing files failed: ${e.message}`, true);
       }
     }
+  );
+  server2.tool(
+    "radio_edit",
+    "Change the text of a message you sent, e.g. to correct it, instead of sending a correction. Everyone sees the new text, marked as edited; agents that already received it are not sent it again.",
+    {
+      message_id: external_exports.string().describe("Id of your message (from the radio_over result)"),
+      message: external_exports.string().describe("The new text"),
+      channel: external_exports.string().optional().describe("Channel of the message (optional)")
+    },
+    async ({ message_id, message, channel }) => changeOwnMessage(message_id, channel, message)
+  );
+  server2.tool(
+    "radio_retract",
+    "Take back a message you sent. Its text and image are removed and everyone sees that it was retracted.",
+    {
+      message_id: external_exports.string().describe("Id of your message (from the radio_over result)"),
+      channel: external_exports.string().optional().describe("Channel of the message (optional)")
+    },
+    async ({ message_id, channel }) => changeOwnMessage(message_id, channel)
   );
   server2.tool(
     "radio_send_image",
@@ -30830,8 +30882,7 @@ ${formatBytes(used)} of ${formatBytes(quota)} used`);
               mimeType: m.image.mimeType
             });
           }
-          const imageTag = (m.image ? " [image attached]" : "") + fileTag(m.file);
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} \u2192 ${m.to}: ${m.content}${imageTag}`;
+          const line = messageLine(m);
           contentBlocks.push({ type: "text", text: line });
         }
         const channels = [
@@ -30939,8 +30990,7 @@ IMPORTANT: Reply in the same channel you received the message on. Use the channe
               mimeType: m.image.mimeType
             });
           }
-          const imageTag = (m.image ? " [image attached]" : "") + fileTag(m.file);
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} \u2192 ${m.to}: ${m.content}${imageTag}`;
+          const line = messageLine(m);
           contentBlocks.push({ type: "text", text: line });
         }
         const channels = [

@@ -5,8 +5,8 @@ import path from "node:path";
 import { channelName } from "./channels.js";
 import { getDashboardHTML } from "./dashboard.js";
 import type { AgentConfigRow } from "./db.js";
-import { createEventStream } from "./events.js";
-import { DAY_MS, FileError, formatBytes } from "./files.js";
+import { createEventStream, type HubEvent } from "./events.js";
+import { createFileSpace, DAY_MS, FileError, formatBytes } from "./files.js";
 import { launchAgent } from "./launcher.js";
 import { createProject, type Project } from "./project.js";
 import {
@@ -48,8 +48,9 @@ function sendError(res: ServerResponse, status: number, message: string): void {
 function authenticateBearer(req: IncomingMessage, expected: string): boolean {
   const auth = req.headers.authorization;
   if (!auth) return false;
-  const [scheme, token] = auth.split(" ");
-  return scheme === "Bearer" && token === expected;
+  // The whole rest must match: a token pasted with extra text must fail here too, as it does on
+  // the live streams, or a dashboard would log in and then get no live updates
+  return auth === `Bearer ${expected}`;
 }
 
 type Route = { method: string; handler: RouteHandler };
@@ -135,6 +136,9 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     dbGetAgentConfig,
     dbGetChannel,
     dbGetChannelMessages,
+    dbFindMessage,
+    dbEditMessage,
+    dbRetractMessage,
     dbGetRecentMessages,
     dbGetUnreadCounts,
     dbGetUserChannels,
@@ -267,6 +271,66 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     }
   };
 
+  function broadcastMessage(message: Message): void {
+    broadcast({
+      type: "message",
+      id: message.id,
+      from: message.from,
+      to: message.to,
+      content: message.content,
+      channel: message.channel,
+      timestamp: message.timestamp,
+      image: message.image,
+      file: message.file,
+      fromRole: message.fromRole,
+      replyTo: message.replyTo,
+    });
+  }
+
+  function replyToField(value: unknown): string | undefined {
+    return typeof value === "string" && value ? value : undefined;
+  }
+
+  // Senders can change what they said or take it back; everyone watching sees the change
+  async function changeMessage(req: IncomingMessage, res: ServerResponse, caller: string, retract: boolean) {
+    const body = JSON.parse(await readBody(req)) as { id?: unknown; channel?: unknown; content?: unknown };
+    if (typeof body.id !== "string" || !body.id) return sendError(res, 400, "Missing or invalid 'id' field");
+    if (!retract && (typeof body.content !== "string" || !body.content.trim())) {
+      return sendError(res, 400, "Missing or invalid 'content' field");
+    }
+    const channel = typeof body.channel === "string" && body.channel ? channelName(body.channel) : undefined;
+    const message = dbFindMessage(body.id, channel);
+    if (!message) return sendError(res, 404, `No message "${body.id}"`);
+    if (message.from !== caller) return sendError(res, 403, "You can only change your own messages");
+    if (message.retracted) return sendError(res, 409, "That message was retracted");
+    const now = Date.now();
+    if (retract) {
+      dbRetractMessage(message.id, now);
+      broadcast({ type: "message_update", id: message.id, channel: message.channel, retracted: true, timestamp: now });
+      // Retracting a shared file's message takes the file back too
+      if (message.file && files.find(message.file.id)) {
+        files.remove(message.file.id);
+        broadcast({ type: "files_change", timestamp: now });
+      }
+    } else {
+      const content = body.content as string;
+      dbEditMessage(message.id, content, now);
+      broadcast({
+        type: "message_update",
+        id: message.id,
+        channel: message.channel,
+        content,
+        editedAt: now,
+        timestamp: now,
+      });
+    }
+    console.log(`[${retract ? "retract" : "edit"}] ${caller} ${message.id} (${message.channel})`);
+    sendJson(res, 200, { ok: true, id: message.id });
+  }
+
+  const handleMessageEdit: RouteHandler = async (req, res, userName) => changeMessage(req, res, userName!, false);
+  const handleMessageRetract: RouteHandler = async (req, res, userName) => changeMessage(req, res, userName!, true);
+
   const handleSend: RouteHandler = async (req, res, userName) => {
     const body = JSON.parse(await readBody(req)) as SendRequest;
     if (!body.to || (!body.content && !body.image)) {
@@ -283,17 +347,10 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     const content = body.content || "";
     const channel = channelName(body.channel || "#all");
     try {
-      const message = routeMessage(userName!, body.to, content, channel, body.image);
-      broadcast({
-        type: "message",
-        from: message.from,
-        to: message.to,
-        content: message.content,
-        channel: message.channel,
-        timestamp: message.timestamp,
-        image: message.image,
-        fromRole: message.fromRole,
+      const message = routeMessage(userName!, body.to, content, channel, body.image, {
+        replyTo: replyToField(body.replyTo),
       });
+      broadcastMessage(message);
       console.log(`[send] ${userName} -> ${body.to} (${channel}): ${content}${body.image ? " [+image]" : ""}`);
       sendJson(res, 200, { id: message.id, to: message.to });
     } catch (e) {
@@ -398,6 +455,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       content?: string;
       channel?: string;
       image?: { data: string; mimeType: string };
+      replyTo?: unknown;
     };
     const from = userName!;
     if (!body.to || (!body.content && !body.image)) {
@@ -406,17 +464,10 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     const content = body.content || "";
     const channel = channelName(body.channel || "#all");
     try {
-      const message = routeMessage(from, body.to, content, channel, body.image);
-      broadcast({
-        type: "message",
-        from: message.from,
-        to: message.to,
-        content: message.content,
-        channel: message.channel,
-        timestamp: message.timestamp,
-        image: message.image,
-        fromRole: message.fromRole,
+      const message = routeMessage(from, body.to, content, channel, body.image, {
+        replyTo: replyToField(body.replyTo),
       });
+      broadcastMessage(message);
       console.log(`[admin-send] ${from} -> ${body.to} (${channel}): ${content}${body.image ? " [+image]" : ""}`);
       sendJson(res, 200, { id: message.id, to: message.to });
     } catch (e) {
@@ -688,16 +739,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
       files.remove(file.id);
       return sendError(res, 404, (e as Error).message);
     }
-    broadcast({
-      type: "message",
-      from: message.from,
-      to: message.to,
-      content: message.content,
-      channel: message.channel,
-      timestamp: message.timestamp,
-      file: message.file,
-      fromRole: message.fromRole,
-    });
+    broadcastMessage(message);
     broadcast({ type: "files_change", timestamp: Date.now() });
     console.log(`[file-upload] ${uploader} ${file.name} (${formatBytes(file.size)}) -> ${channel}`);
     sendJson(res, 200, { ...file, messageId: message.id });
@@ -938,6 +980,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     "/kick": { method: "POST", handler: handleKick },
     "/kick-all": { method: "POST", handler: handleKickAll },
     "/admin-send": { method: "POST", handler: handleAdminSend },
+    "/admin-message-edit": { method: "POST", handler: handleMessageEdit },
+    "/admin-message-retract": { method: "POST", handler: handleMessageRetract },
     "/admin-file-upload": { method: "POST", handler: handleFileUpload },
     "/admin-files": { method: "GET", handler: handleFileList },
     "/admin-file-ticket": { method: "POST", handler: handleAdminFileTicket },
@@ -959,6 +1003,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
 
   const protectedRoutes: RouteTable = {
     "/send": { method: "POST", handler: handleSend },
+    "/message-edit": { method: "POST", handler: handleMessageEdit },
+    "/message-retract": { method: "POST", handler: handleMessageRetract },
     "/file-upload": { method: "POST", handler: handleFileUpload },
     "/file-download": { method: "GET", handler: handleFileDownload },
     "/files": { method: "GET", handler: handleFileList },
@@ -1237,7 +1283,11 @@ type HubWideEvent =
   | { type: "project_create"; name: string; timestamp: number }
   | { type: "project_archive"; name: string; timestamp: number }
   | { type: "activity"; project: string; channel: string; from: string; timestamp: number }
-  | { type: "read"; project: string; userName: string; channel: string; timestamp: number };
+  | { type: "read"; project: string; userName: string; channel: string; timestamp: number }
+  /** The first event of each stream: the id to choose its projects with (/admin-hub-stream). */
+  | { type: "hello"; stream: string }
+  /** An event of a project the stream's page has open. */
+  | { type: "project_event"; project: string; event: HubEvent };
 
 export interface HubOptions {
   /** Database of the default project (default: $WALKIE_TALKIE_DB_PATH or ./walkie-talkie.db). */
@@ -1293,6 +1343,7 @@ export function createHubServer(
 
   const apps = new Map<string, ProjectApp>();
   const events = createEventStream<HubWideEvent>();
+  const fileSpace = createFileSpace(); // the file limits all projects share
   // Each hub-wide stream makes its human present in every project (where the name is free)
   const hubPresences = new Set<{ name: string; apps: Set<ProjectApp> }>();
   function attachPresence(presence: { name: string; apps: Set<ProjectApp> }, app: ProjectApp): void {
@@ -1300,11 +1351,17 @@ export function createHubServer(
     app.connectHuman(presence.name);
     presence.apps.add(app);
   }
+  // A browser opens at most 6 connections to a server, so the project tabs page keeps one stream
+  // for everything: hub-wide events, plus the events of the projects it has open
+  const hubStreams = new Map<string, { res: ServerResponse; projects: Set<string> }>();
   let shuttingDown = false;
 
   function openProject(name: string, file: string): ProjectApp {
-    const app = createProjectApp(createProject(name, file), adminToken, joinToken);
+    const app = createProjectApp(createProject(name, file, fileSpace), adminToken, joinToken);
     app.project.events.subscribe((ev) => {
+      for (const stream of hubStreams.values()) {
+        if (stream.projects.has(name)) events.send(stream.res, { type: "project_event", project: name, event: ev });
+      }
       if (ev.type === "message") {
         events.broadcast({
           type: "activity",
@@ -1378,16 +1435,30 @@ export function createHubServer(
     sendJson(res, 200, { ok: true, project: name, archivedAs });
   }
 
+  /** Chooses the projects whose events a hub-wide stream carries (the projects its page has open). */
+  async function handleHubStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = JSON.parse((await readBody(req)) || "{}") as { stream?: unknown; projects?: unknown };
+    const stream = typeof body.stream === "string" ? hubStreams.get(body.stream) : undefined;
+    if (!stream) return sendError(res, 404, "No such stream");
+    const wanted = Array.isArray(body.projects) ? body.projects : [];
+    stream.projects = new Set(wanted.filter((p): p is string => typeof p === "string" && apps.has(p)));
+    sendJson(res, 200, { ok: true, projects: [...stream.projects] });
+  }
+
   function handleHubEvents(url: URL, res: ServerResponse) {
     const name = streamHuman(url, res, adminToken, defaultApp ? defaultApp.ensureHuman : humanNameError);
     if (!name) return;
     const presence = { name, apps: new Set<ProjectApp>() };
     for (const app of apps.values()) attachPresence(presence, app);
     hubPresences.add(presence);
+    const stream = randomUUID();
+    hubStreams.set(stream, { res, projects: new Set() });
     events.addSSEClient(res, () => {
+      hubStreams.delete(stream);
       hubPresences.delete(presence);
       for (const app of presence.apps) app.disconnectHuman(name);
     });
+    events.send(res, { type: "hello", stream });
   }
 
   /** Routes that concern the hub as a whole rather than one project (admin token). */
@@ -1395,6 +1466,7 @@ export function createHubServer(
     "/projects": { method: "GET", handler: async (_req, res) => sendJson(res, 200, { projects: listProjects() }) },
     "/admin-project-create": { method: "POST", handler: handleProjectCreate },
     "/admin-project-archive": { method: "POST", handler: handleProjectArchive },
+    "/admin-hub-stream": { method: "POST", handler: handleHubStream },
   };
   // The project tabs page logs in here; with a default project, that project checks the name
   if (!defaultApp) {

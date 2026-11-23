@@ -2,7 +2,7 @@ import { type Auth, createAuth } from "./auth.js";
 import { type Channels, createChannels } from "./channels.js";
 import { openProjectDB, type ProjectDB } from "./db.js";
 import { createEventStream, type EventStream } from "./events.js";
-import { createFileStore, type FileStore, filesDirFor } from "./files.js";
+import { createFileStore, type FileSpace, type FileStore, filesDirFor } from "./files.js";
 import { createPolling, type Polling } from "./polling.js";
 import { createRouter, type Router } from "./router.js";
 
@@ -18,7 +18,8 @@ export interface Project {
   files: FileStore;
 }
 
-export function createProject(name: string, dbPath: string): Project {
+/** One project; `fileSpace` is shared by the projects of a hub (the hub-wide file limits). */
+export function createProject(name: string, dbPath: string, fileSpace?: FileSpace): Project {
   const db = openProjectDB(dbPath);
   const channels = createChannels(db);
   const auth = createAuth(db, channels);
@@ -26,6 +27,9 @@ export function createProject(name: string, dbPath: string): Project {
   const polling = createPolling((userName) => router.drainQueue(userName));
   const router = createRouter(db, auth, channels, polling);
   const events = createEventStream();
-  const files = createFileStore(db, filesDirFor(dbPath, name), { temporary: dbPath === ":memory:" });
+  const files = createFileStore(db, filesDirFor(dbPath, name), {
+    space: fileSpace,
+    temporary: dbPath === ":memory:",
+  });
   return { name, db, auth, channels, polling, router, events, files };
 }

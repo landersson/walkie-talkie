@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 export type HubEvent =
   | {
       type: "message";
+      id: string;
       from: string;
       to: string;
       content: string;
@@ -11,6 +12,16 @@ export type HubEvent =
       image?: { data: string; mimeType: string };
       file?: { id: string; name: string; size: number };
       fromRole?: "agent" | "bridge" | "human";
+      replyTo?: string;
+    }
+  | {
+      type: "message_update";
+      id: string;
+      channel: string;
+      content?: string;
+      editedAt?: number;
+      retracted?: boolean;
+      timestamp: number;
     }
   | { type: "files_change"; timestamp: number }
   | { type: "join"; name: string; role?: "agent" | "bridge" | "human"; timestamp: number }
@@ -88,13 +99,18 @@ export function createEventStream<E = HubEvent>() {
     for (const listener of listeners) listener(event);
   }
 
+  /** Sends `event` to one client of this stream only. */
+  function send(client: ServerResponse, event: E): void {
+    client.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+
   /** Calls `listener` with every event broadcast on this stream; returns an unsubscribe function. */
   function subscribe(listener: (event: E) => void): () => void {
     listeners.add(listener);
     return () => listeners.delete(listener);
   }
 
-  return { addSSEClient, closeAllSSEClients, broadcast, subscribe };
+  return { addSSEClient, closeAllSSEClients, broadcast, send, subscribe };
 }
 
 export type EventStream<E = HubEvent> = ReturnType<typeof createEventStream<E>>;

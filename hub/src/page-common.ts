@@ -165,6 +165,7 @@ export const LOGIN_SCRIPT = `    // Login: the admin token is never embedded in 
     const TOKEN_STORAGE_KEY = "walkie-talkie-admin-token";
     const USER_STORAGE_KEY = "walkie-talkie-user-name";
     const SWITCH_USER_KEY = "walkie-talkie-switch-user";
+    const LOGIN_ERROR_KEY = "walkie-talkie-login-error";
     const loginDialogEl = document.getElementById("login-dialog");
     const loginTokenEl = document.getElementById("login-token");
     const loginNameEl = document.getElementById("login-name");
@@ -242,6 +243,19 @@ export const LOGIN_SCRIPT = `    // Login: the admin token is never embedded in 
         .catch(() => showLogin("Could not reach the Hub"));
     }
 
+    // A live stream closed for good. That also happens when the page is reloaded or closed, so only
+    // when the hub now rejects the token is it forgotten, and the login asked for again.
+    function checkStreamRefused(probeUrl) {
+      fetch(probeUrl, { headers: { "Authorization": "Bearer " + readStored(TOKEN_STORAGE_KEY) } })
+        .then((r) => {
+          if (r.status !== 401) return;
+          store(TOKEN_STORAGE_KEY, "");
+          store(LOGIN_ERROR_KEY, "The Hub no longer accepts this admin token: log in again", true);
+          location.reload();
+        })
+        .catch(() => {});
+    }
+
     document.getElementById("login-submit").onclick = () => submitLogin();
     loginOperatorBtnEl.onclick = () => submitLogin("operator");
     loginTokenEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
@@ -257,6 +271,8 @@ export const LOGIN_SCRIPT = `    // Login: the admin token is never embedded in 
     function beginLogin() {
       loginNeedsToken = !readStored(TOKEN_STORAGE_KEY);
       loginNeedsName = !rememberedName();
-      if (loginNeedsToken || loginNeedsName) showLogin();
+      const error = readStored(LOGIN_ERROR_KEY, true);
+      store(LOGIN_ERROR_KEY, "", true);
+      if (loginNeedsToken || loginNeedsName) showLogin(error);
       else submitLogin();
     }`;

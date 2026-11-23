@@ -182,9 +182,8 @@ ${LOGIN_DIALOG_HTML}
 ${LOGIN_SCRIPT}
 
     const ACTIVE_PROJECT_KEY = "walkie-talkie-active-project";
-    // Browsers allow 6 connections per server and each open dashboard keeps one for its live
-    // stream, so only this many project dashboards stay loaded (most recently used first)
-    const MAX_LOADED = 3;
+    // Only this many project dashboards stay loaded (most recently used first), to save memory
+    const MAX_LOADED = 5;
 
     let ADMIN_TOKEN = "";
     let MY_NAME = "";
@@ -196,6 +195,13 @@ ${LOGIN_SCRIPT}
     const unread = new Map(); // project -> number of unread messages
     const dots = new Map(); // project -> its dashboard wants the tab icon dot
     const refreshTimers = new Map();
+
+    // One live stream serves the whole page: a browser opens only 6 connections to a server, so
+    // the dashboards don't open their own. The hub sends the events of the projects loaded here.
+    let hubStream = ""; // the stream's id, to tell the hub which projects are loaded
+    let streamOpen = false;
+    const listening = new Set(); // projects whose dashboard is ready for events
+    const waiting = new Map(); // project -> events that came before its dashboard was ready
 
     const tabsEl = document.getElementById("tabs");
     const framesEl = document.getElementById("frames");
@@ -242,10 +248,7 @@ ${LOGIN_SCRIPT}
     }
 
     function postActive(name, active) {
-      const frame = frames.get(name);
-      if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage({ type: "walkie-active", active }, location.origin);
-      }
+      postToFrame(name, { type: "walkie-active", active });
     }
 
     function showProject(name) {
@@ -264,11 +267,13 @@ ${LOGIN_SCRIPT}
 
       let frame = frames.get(name);
       if (!frame) {
+        // The dashboard loads once the hub sends its events, so it misses none
         frame = document.createElement("iframe");
-        frame.src = projectBase(name) + "?embedded=1";
         frame.title = name;
         frames.set(name, frame);
+        waiting.set(name, []);
         framesEl.appendChild(frame);
+        syncStream();
       }
       for (const [n, f] of frames) f.classList.toggle("active", n === name);
       if (previous && previous !== name) postActive(previous, false);
@@ -286,6 +291,46 @@ ${LOGIN_SCRIPT}
       if (frame) frame.remove();
       frames.delete(name);
       dots.delete(name);
+      listening.delete(name);
+      waiting.delete(name);
+      syncStream();
+    }
+
+    // Tell the hub which projects' events this page wants, then load dashboards waiting for that
+    function syncStream() {
+      if (!hubStream) return;
+      fetch("/admin-hub-stream", {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({ stream: hubStream, projects: [...frames.keys()] }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          for (const name of data.projects || []) {
+            const frame = frames.get(name);
+            if (frame && !frame.getAttribute("src")) frame.src = projectBase(name) + "?embedded=1";
+          }
+        })
+        .catch(() => {});
+    }
+
+    function frameName(source) {
+      return [...frames].find(([, f]) => f.contentWindow === source)?.[0];
+    }
+
+    function postToFrame(name, data) {
+      const frame = frames.get(name);
+      if (frame && frame.contentWindow) frame.contentWindow.postMessage(data, location.origin);
+    }
+
+    function deliver(name, event) {
+      if (listening.has(name)) postToFrame(name, { type: "walkie-event", event });
+      else waiting.get(name)?.push(event);
+    }
+
+    function setStreamOpen(open) {
+      streamOpen = open;
+      for (const name of listening) postToFrame(name, { type: "walkie-stream", open });
     }
 
     // Drop a project's dashboard; its badge is then kept up to date from the hub
@@ -313,9 +358,18 @@ ${LOGIN_SCRIPT}
 
     // Loaded dashboards report their unread count and whether they want the tab icon dot
     window.addEventListener("message", (e) => {
-      if (e.origin !== location.origin || !e.data || e.data.type !== "walkie-unread") return;
-      const name = [...frames].find(([, f]) => f.contentWindow === e.source)?.[0];
+      if (e.origin !== location.origin || !e.data) return;
+      const name = frameName(e.source);
       if (!name) return;
+      if (e.data.type === "walkie-ready") {
+        listening.add(name);
+        for (const event of waiting.get(name) || []) postToFrame(name, { type: "walkie-event", event });
+        waiting.set(name, []);
+        postToFrame(name, { type: "walkie-stream", open: streamOpen });
+        postActive(name, name === activeProject); // it may have loaded behind another tab
+        return;
+      }
+      if (e.data.type !== "walkie-unread") return;
       unread.set(name, e.data.unread || 0);
       dots.set(name, !!e.data.dot);
       renderTabs();
@@ -347,7 +401,12 @@ ${LOGIN_SCRIPT}
       es.onmessage = (msg) => {
         let ev;
         try { ev = JSON.parse(msg.data); } catch { return; }
-        if (ev.type === "project_create") {
+        if (ev.type === "hello") {
+          hubStream = ev.stream;
+          syncStream();
+        } else if (ev.type === "project_event") {
+          deliver(ev.project, ev.event);
+        } else if (ev.type === "project_create") {
           if (!projects.some((p) => p.name === ev.name)) {
             loadProjects().then(() => (activeProject ? renderTabs() : showProject(ev.name))).catch(() => {});
           }
@@ -358,7 +417,13 @@ ${LOGIN_SCRIPT}
         }
       };
       // EventSource reconnects by itself; after a hub restart, catch up on what changed
+      es.onerror = () => {
+        setStreamOpen(false);
+        // Closed for good: the page is going away, or the hub refused it (e.g. the admin token changed)
+        if (es.readyState === EventSource.CLOSED) checkStreamRefused("/projects");
+      };
       es.onopen = () => {
+        setStreamOpen(true);
         if (!opened) { opened = true; return; }
         loadProjects().then(() => {
           if (!projects.some((p) => p.name === activeProject)) showProject(fallbackProject());
@@ -443,8 +508,8 @@ ${LOGIN_SCRIPT}
       loadProjects()
         .then(() => {
           const wanted = decodeURIComponent(location.hash.slice(1)) || readStored(ACTIVE_PROJECT_KEY);
-          showProject(wanted);
           connectHubEvents();
+          showProject(wanted);
         })
         .catch(() => showLogin("Could not load the projects"));
     }

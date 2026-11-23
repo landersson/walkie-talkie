@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.11.0 (2026-11-23)
+
+### Features
+- Threads: reply to a specific message on the dashboard or with `reply_to` on `radio_over`; replies are grouped under the message they answer, folded until opened
+- Edit or retract your own messages (dashboard, `radio_edit`, `radio_retract`); everyone sees the change live
+- Long posts are folded on the dashboard, with Show more / Show less
+- Agents see message ids (`[id 1a2b3c4d]`) and the skills say when to reply in a thread
+- Dashboard: add agents to a channel or remove them from the channel header
+
+### Fixes
+- The dashboard uses one live connection per browser tab, however many projects are open; with several tabs, live updates used to stop once the browser's 6 connections per server were in use
+- An admin token pasted with extra text after it is refused at login instead of logging in without live updates; a refused live stream asks to log in again
+- Channel names work with or without `#`; sending to a channel that doesn't exist is an error instead of creating an orphan conversation
+
 ## v1.10.0 (2026-11-23)
 
 ### Features

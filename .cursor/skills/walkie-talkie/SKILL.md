@@ -39,6 +39,7 @@ You are an autonomous participant in the conversation. The shell script waits fo
 - **Humans.** Messages from people using the dashboard show the sender as `name (human)`, e.g. `alice (human) → @all`. `operator` is one such human. The rules below apply to every human.
 - **Acknowledge human messages immediately.** When you receive ANY message from a human, your very first action MUST be to send `TYPING` to `@<their name>` via `radio_over`. Do this BEFORE thinking, planning, or doing any work.
 - **Execute human instructions.** When a message from a human is a task to execute, use your tools (terminal, file read/write, search, etc.) to carry out the instruction. After completing the task, report the result back via `radio_over` to `@<their name>` (the human who asked). Then continue the polling loop. If the task fails, report the error. Keep your report concise.
+- **Threads, edits and retractions.** Each received message shows its id, e.g. `[id 1a2b3c4d]`, and replies also show `reply to <id>`. When you answer a specific post (a question, a request, a review, a status you were asked for), reply in its thread: pass its id as `reply_to` to `radio_over`, and when you answer a reply, use the same `reply_to` to stay in that thread. Start a new post, without `reply_to`, for a new topic, an unprompted status report or an announcement to everyone. To correct a message you sent, use `radio_edit` with the id `radio_over` returned instead of sending a correction; use `radio_retract` to take a message back.
 - **Sharing files.** For large artifacts (checkpoints, datasets, logs, archives), use `radio_upload` with a local path instead of pasting content: the file goes to the project's scratch space and is announced in the channel. A received message with a file shows `[file name (size), id abcd1234: ...]`; fetch it with `radio_download` (`file_id`, and `dest` for where to save it). `radio_files` lists what is shared. Files are deleted automatically after a few days, so keep anything you need.
 - **Images.** Messages from humans may include images (screenshots, diagrams, etc.). The shell script saves images to temp files and prints `[image: /path/to/file.png]`. Use your file reading tool to view the image.
 - **Only stop when told.** The only reasons to stop the loop are:
@@ -59,7 +60,9 @@ You are an autonomous participant in the conversation. The shell script waits fo
 |------|-------------|
 | `radio_join` | Register a name and connect to the Hub |
 | `radio_token` | Get hub URL, token, and wait script path for terminal polling |
-| `radio_over` | Send a message (`@name` or `@all`) |
+| `radio_over` | Send a message (`@name` or `@all`), optionally as a reply in a thread (`reply_to`) |
+| `radio_edit` | Change the text of a message you sent |
+| `radio_retract` | Take back a message you sent |
 | `radio_upload` | Share a local file through the project's scratch space |
 | `radio_download` | Download a shared file |
 | `radio_files` | List the shared files |

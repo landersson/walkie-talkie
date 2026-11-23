@@ -15,22 +15,49 @@ const ORPHAN_UPLOAD_MS = DAY_MS; // unfinished uploads left behind by a crash
 
 export interface FileLimits {
   maxFileBytes: number;
+  /** Per project */
   quotaBytes: number;
+  /** All projects of the hub together */
+  totalBytes: number;
+  /** Uploads are refused when they would leave less than this free on the disk */
+  minFreeBytes: number;
   ttlMs: number;
 }
 
-function envNumber(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+function envNumber(name: string, fallback: number, allowZero = false): number {
+  const raw = process.env[name];
+  const value = Number(raw);
+  return raw && Number.isFinite(value) && (value > 0 || (allowZero && value === 0)) ? value : fallback;
 }
 
-/** Limits of every project's scratch space, from the environment (sizes in GB, TTL in days). */
+/** Limits of the scratch space, from the environment (sizes in GB, TTL in days). */
 export function fileLimitsFromEnv(): FileLimits {
   return {
     maxFileBytes: envNumber("WALKIE_TALKIE_FILE_MAX_GB", 2) * GB,
     quotaBytes: envNumber("WALKIE_TALKIE_FILES_QUOTA_GB", 20) * GB,
+    totalBytes: envNumber("WALKIE_TALKIE_FILES_TOTAL_GB", 100) * GB,
+    minFreeBytes: envNumber("WALKIE_TALKIE_FILES_MIN_FREE_GB", 50, true) * GB,
     ttlMs: envNumber("WALKIE_TALKIE_FILE_TTL_DAYS", 7) * DAY_MS,
   };
+}
+
+/** What a hub's projects share: the limits, and how much each project takes (stored plus uploading). */
+export function createFileSpace(limits: FileLimits = fileLimitsFromEnv()) {
+  const projects = new Set<() => number>();
+  return {
+    limits,
+    add: (bytesTaken: () => number) => projects.add(bytesTaken),
+    remove: (bytesTaken: () => number) => projects.delete(bytesTaken),
+    used: () => [...projects].reduce((sum, taken) => sum + taken(), 0),
+  };
+}
+
+export type FileSpace = ReturnType<typeof createFileSpace>;
+
+/** Free bytes for unprivileged users on the disk holding `dir`. */
+function freeBytes(dir: string): number {
+  const s = fs.statfsSync(dir);
+  return s.bavail * s.bsize;
 }
 
 /**
@@ -78,10 +105,14 @@ function cleanName(name: string): string {
 export function createFileStore(
   db: ProjectDB,
   dir: string,
-  { limits = fileLimitsFromEnv(), temporary = false }: { limits?: FileLimits; temporary?: boolean } = {},
+  { space = createFileSpace(), temporary = false }: { space?: FileSpace; temporary?: boolean } = {},
 ) {
   const { dbDeleteFile, dbExpiredFiles, dbFilesTotalSize, dbFindFile, dbListFiles, dbSaveFile } = db;
+  const { limits } = space;
   const tickets = new Map<string, { id: string; expires: number }>();
+  let uploading = 0; // bytes of this project's uploads in progress
+  const bytesTaken = () => dbFilesTotalSize() + uploading;
+  space.add(bytesTaken);
   fs.mkdirSync(dir, { recursive: true });
 
   function filePath(id: string): string {
@@ -103,12 +134,23 @@ export function createFileStore(
         `File too large: ${formatBytes(declared)} (at most ${formatBytes(limits.maxFileBytes)})`,
       );
     }
-    const used = dbFilesTotalSize();
+    // Uploads still in progress count too, so simultaneous ones can't overrun the limits together
+    const used = bytesTaken();
     if (used + declared > limits.quotaBytes) {
       throw new FileError(
         413,
         `Not enough room in this project's scratch space: ${formatBytes(used)} of ${formatBytes(limits.quotaBytes)} used`,
       );
+    }
+    const hubUsed = space.used();
+    if (hubUsed + declared > limits.totalBytes) {
+      throw new FileError(
+        413,
+        `Not enough room in this hub's scratch space: ${formatBytes(hubUsed)} of ${formatBytes(limits.totalBytes)} used by all projects`,
+      );
+    }
+    if (freeBytes(dir) - declared < limits.minFreeBytes) {
+      throw new FileError(507, "The hub's disk is almost full: no new files for now");
     }
 
     const id = randomUUID();
@@ -121,6 +163,7 @@ export function createFileStore(
         else done(null, chunk);
       },
     });
+    uploading += declared;
     try {
       await pipeline(req, counter, fs.createWriteStream(temp));
       if (received !== declared) throw new FileError(400, "The upload ended early");
@@ -128,6 +171,8 @@ export function createFileStore(
     } catch (e) {
       fs.rmSync(temp, { force: true });
       throw e instanceof FileError ? e : new FileError(400, `Upload failed: ${(e as Error).message}`);
+    } finally {
+      uploading -= declared;
     }
 
     const now = Date.now();
@@ -198,6 +243,7 @@ export function createFileStore(
 
   /** Delete the whole scratch space (the project is being archived). */
   function destroy(): void {
+    space.remove(bytesTaken);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 

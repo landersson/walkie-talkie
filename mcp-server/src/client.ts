@@ -298,13 +298,18 @@ export class HubClient {
     content: string,
     channel?: string,
     image?: { data: string; mimeType: string },
+    replyTo?: string,
   ): Promise<{ id: string; to: string }> {
-    const body: { to: string; content: string; channel?: string; image?: { data: string; mimeType: string } } = {
-      to,
-      content,
-    };
+    const body: {
+      to: string;
+      content: string;
+      channel?: string;
+      image?: { data: string; mimeType: string };
+      replyTo?: string;
+    } = { to, content };
     if (channel) body.channel = channel;
     if (image) body.image = image;
+    if (replyTo) body.replyTo = replyTo;
     const res = await this.request<{ id: string; to: string }>({
       method: "POST",
       path: "/send",
@@ -317,6 +322,20 @@ export class HubClient {
     return res.data;
   }
 
+  /** Change (content given) or retract (no content) one of your own messages. */
+  async changeMessage(token: string, id: string, channel?: string, content?: string): Promise<{ id: string }> {
+    const res = await this.request<{ id: string }>({
+      method: "POST",
+      path: content === undefined ? "/message-retract" : "/message-edit",
+      token,
+      body: { id, channel, content },
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Request failed");
+    }
+    return res.data;
+  }
+
   async poll(
     token: string,
     timeoutSec = 3600,
@@ -325,6 +344,8 @@ export class HubClient {
       id: string;
       from: string;
       fromRole?: string;
+      replyTo?: string;
+      editedAt?: number;
       file?: { id: string; name: string; size: number };
       to: string;
       content: string;
@@ -338,6 +359,8 @@ export class HubClient {
         id: string;
         from: string;
         fromRole?: string;
+        replyTo?: string;
+        editedAt?: number;
         file?: { id: string; name: string; size: number };
         to: string;
         content: string;
@@ -364,6 +387,8 @@ export class HubClient {
       id: string;
       from: string;
       fromRole?: string;
+      replyTo?: string;
+      editedAt?: number;
       file?: { id: string; name: string; size: number };
       to: string;
       content: string;
@@ -377,6 +402,8 @@ export class HubClient {
         id: string;
         from: string;
         fromRole?: string;
+        replyTo?: string;
+        editedAt?: number;
         file?: { id: string; name: string; size: number };
         to: string;
         content: string;

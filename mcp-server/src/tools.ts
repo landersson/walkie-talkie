@@ -44,6 +44,29 @@ function textResult(text: string, isError = false) {
   return { content: [{ type: "text" as const, text }], ...(isError ? { isError: true } : {}) };
 }
 
+// Messages are named by the start of their id, enough to reply to, edit or retract them
+const SHORT_ID = 8;
+
+/** One received message as a line for the agent, e.g. "[10:02:03] #dev alice (human) → @all [id 1a2b3c4d]: hi" */
+function messageLine(m: {
+  id?: string;
+  from: string;
+  fromRole?: string;
+  to: string;
+  content: string;
+  channel?: string;
+  timestamp: number;
+  image?: unknown;
+  file?: { id: string; name: string; size: number };
+  replyTo?: string;
+}): string {
+  const ids = m.id
+    ? ` [id ${m.id.slice(0, SHORT_ID)}${m.replyTo ? `, reply to ${m.replyTo.slice(0, SHORT_ID)}` : ""}]`
+    : "";
+  const attached = (m.image ? " [image attached]" : "") + fileTag(m.file);
+  return `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}${ids}: ${m.content}${attached}`;
+}
+
 function getMimeType(source: string): string {
   const ext = path.extname(source).toLowerCase();
   return MIME_TYPES[ext] ?? "image/png";
@@ -208,6 +231,20 @@ async function waitForMessages(
   return reconnecting ? "unreachable" : [];
 }
 
+async function changeOwnMessage(id: string, channel?: string, content?: string) {
+  if (!currentToken) {
+    return { content: [{ type: "text" as const, text: "Not on the air. Use radio_join first." }], isError: true };
+  }
+  try {
+    await client.changeMessage(currentToken, id, channel, content);
+    return {
+      content: [{ type: "text" as const, text: `Message ${id} ${content === undefined ? "retracted" : "edited"}` }],
+    };
+  } catch (e) {
+    return { content: [{ type: "text" as const, text: `Failed: ${(e as Error).message}` }], isError: true };
+  }
+}
+
 export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   client = new HubClient(hubUrl);
   joinToken = joinTok;
@@ -274,8 +311,14 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         .string()
         .optional()
         .describe("MIME type of the image (e.g. 'image/png'). Must be provided together with image_data."),
+      reply_to: z
+        .string()
+        .optional()
+        .describe(
+          "Reply in a thread: the id of a message in the same channel (the 'id' shown with received messages). Use it whenever you answer a specific post or a reply in a thread; leave it out for a new topic or announcement.",
+        ),
     },
-    async ({ to, message, channel, image_data, image_mime_type }) => {
+    async ({ to, message, channel, image_data, image_mime_type, reply_to }) => {
       if (!currentToken) {
         return {
           content: [{ type: "text" as const, text: "Not on the air. Use radio_join first." }],
@@ -284,12 +327,12 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       }
       try {
         const image = image_data && image_mime_type ? { data: image_data, mimeType: image_mime_type } : undefined;
-        const result = await client.send(currentToken, to, message, channel, image);
+        const result = await client.send(currentToken, to, message, channel, image, reply_to);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Message sent to ${result.to} in ${channel || "#all"} (id: ${result.id})`,
+              text: `Message sent to ${result.to} in ${channel || "#all"} (id: ${result.id.slice(0, SHORT_ID)})`,
             },
           ],
         };
@@ -369,6 +412,27 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         return textResult(`Listing files failed: ${(e as Error).message}`, true);
       }
     },
+  );
+
+  server.tool(
+    "radio_edit",
+    "Change the text of a message you sent, e.g. to correct it, instead of sending a correction. Everyone sees the new text, marked as edited; agents that already received it are not sent it again.",
+    {
+      message_id: z.string().describe("Id of your message (from the radio_over result)"),
+      message: z.string().describe("The new text"),
+      channel: z.string().optional().describe("Channel of the message (optional)"),
+    },
+    async ({ message_id, message, channel }) => changeOwnMessage(message_id, channel, message),
+  );
+
+  server.tool(
+    "radio_retract",
+    "Take back a message you sent. Its text and image are removed and everyone sees that it was retracted.",
+    {
+      message_id: z.string().describe("Id of your message (from the radio_over result)"),
+      channel: z.string().optional().describe("Channel of the message (optional)"),
+    },
+    async ({ message_id, channel }) => changeOwnMessage(message_id, channel),
   );
 
   server.tool(
@@ -456,8 +520,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
               mimeType: m.image.mimeType,
             });
           }
-          const imageTag = (m.image ? " [image attached]" : "") + fileTag(m.file);
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}: ${m.content}${imageTag}`;
+          const line = messageLine(m);
           contentBlocks.push({ type: "text" as const, text: line });
         }
         const channels = [
@@ -580,8 +643,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
               mimeType: m.image.mimeType,
             });
           }
-          const imageTag = (m.image ? " [image attached]" : "") + fileTag(m.file);
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}: ${m.content}${imageTag}`;
+          const line = messageLine(m);
           contentBlocks.push({ type: "text" as const, text: line });
         }
 

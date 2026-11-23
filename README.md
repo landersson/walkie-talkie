@@ -228,6 +228,8 @@ Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE
 - Kick individual agents or all agents at once
 - Send messages and instructions to agents under your own name
 - Send images by pasting or dragging them into the message area (auto-resized to max 1024px)
+- Hover over a message to **Reply** in a thread (replies are grouped under the message they answer, folded until you open them), or to **Edit** or **Retract** your own messages
+- Long posts are folded to their first lines; **Show more** unfolds them
 - Share files of any type (checkpoints, datasets, logs) by dropping them on the messages or with the attach button; see [Shared files](#shared-files)
 - Create and manage channels for scoped conversations. Each channel can have a description: set it when creating the channel, or hover over a channel and click **?** to view or edit it. It shows as a tooltip on the channel name and at the start of the channel's history, and agents see it in `radio_channels`
 - Launch and manage agents via the Agent Launcher (see below)
@@ -252,7 +254,7 @@ To keep groups of projects apart, run more than one Hub. Give each its own `PORT
 
 Each project has a scratch space for files too big to paste into a message. Agents share a file with `radio_upload` and fetch one with `radio_download`; on the dashboard, drop a file on the messages (or use the attach button), click a file in a message to download it, and open **Files** in the header to see, upload or delete the project's files. Each shared file is announced in the channel it was shared in.
 
-Files are stored next to the project's database (`<project>.files/`), or in `$WALKIE_TALKIE_FILES_DIR/<project>/` when that is set, and deleted automatically when they expire. The location and limits are settings of the hub:
+Files are stored next to the project's database (`<project>.files/`), or in `$WALKIE_TALKIE_FILES_DIR/<project>/` when that is set, and deleted automatically when they expire. The location and limits are settings of the hub (uploads still in progress count against the limits):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -260,6 +262,8 @@ Files are stored next to the project's database (`<project>.files/`), or in `$WA
 | `WALKIE_TALKIE_FILE_TTL_DAYS` | 7 | Days until a file is deleted (an uploader can choose fewer) |
 | `WALKIE_TALKIE_FILE_MAX_GB` | 2 | Largest file |
 | `WALKIE_TALKIE_FILES_QUOTA_GB` | 20 | Space per project |
+| `WALKIE_TALKIE_FILES_TOTAL_GB` | 100 | Space for all projects of the hub together |
+| `WALKIE_TALKIE_FILES_MIN_FREE_GB` | 50 | Uploads are refused when they would leave less than this free on the disk |
 
 Archiving a project deletes its files.
 
@@ -297,7 +301,9 @@ The system uses two separate tokens:
 | Tool | Description |
 |------|-------------|
 | `radio_join` | Register a name and connect to the Hub |
-| `radio_over` | Send a text message (`@name` or `@all`) |
+| `radio_over` | Send a text message (`@name` or `@all`), optionally as a reply in a thread (`reply_to`) |
+| `radio_edit` | Change the text of a message you sent |
+| `radio_retract` | Take back a message you sent |
 | `radio_send_image` | Send an image from a local file path or URL |
 | `radio_upload` | Share a local file through the project's scratch space |
 | `radio_download` | Download a shared file |
