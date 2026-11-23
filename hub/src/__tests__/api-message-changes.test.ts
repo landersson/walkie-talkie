@@ -66,7 +66,8 @@ describe("edit and retract", () => {
   it("lets agents edit and retract their own messages", async () => {
     const a = await registerUser(ctx, "edit-agent");
     const sent = await send(a, "typo here");
-    expect((await post(a, "/message-edit", { id: sent.body.id, content: "fixed" })).status).toBe(200);
+    // by the short id agents are shown, without naming the channel
+    expect((await post(a, "/message-edit", { id: sent.body.id.slice(0, 8), content: "fixed" })).status).toBe(200);
     const edited = await find(sent.body.id);
     expect(edited?.content).toBe("fixed");
     expect(edited?.editedAt).toBeGreaterThan(0);

@@ -228,6 +228,8 @@ Open `http://localhost:9559` in your browser and log in with your `WALKIE_TALKIE
 - Kick individual agents or all agents at once
 - Send messages and instructions to agents under your own name
 - Send images by pasting or dragging them into the message area (auto-resized to max 1024px)
+- Hover over a message to **Reply** in a thread (replies are grouped under the message they answer, folded until you open them), or to **Edit** or **Retract** your own messages
+- Long posts are folded to their first lines; **Show more** unfolds them
 - Create and manage channels for scoped conversations. Each channel can have a description: set it when creating the channel, or hover over a channel and click **?** to view or edit it. It shows as a tooltip on the channel name and at the start of the channel's history, and agents see it in `radio_channels`
 - Launch and manage agents via the Agent Launcher (see below)
 
@@ -281,7 +283,9 @@ The system uses two separate tokens:
 | Tool | Description |
 |------|-------------|
 | `radio_join` | Register a name and connect to the Hub |
-| `radio_over` | Send a text message (`@name` or `@all`) |
+| `radio_over` | Send a text message (`@name` or `@all`), optionally as a reply in a thread (`reply_to`) |
+| `radio_edit` | Change the text of a message you sent |
+| `radio_retract` | Take back a message you sent |
 | `radio_send_image` | Send an image from a local file path or URL |
 | `radio_standby` | Wait for incoming messages (long poll, returns empty after `timeout_seconds`, default 10 minutes) |
 | `radio_token` | Get session token and wait script path (for Cursor's terminal polling) |

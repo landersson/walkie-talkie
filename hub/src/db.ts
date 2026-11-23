@@ -229,16 +229,16 @@ export function openProjectDB(dbPath: string) {
 
   const MESSAGE_COLUMNS = `rowid AS seq, id, "from", "to", content, channel, timestamp, image, reply_to, edited_at, retracted_at`;
 
-  function dbGetMessage(id: string): Message | undefined {
-    const row = db.prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = ?`).get(id);
-    return row ? parseMessageRow(row as Record<string, unknown>) : undefined;
-  }
-
-  /** A channel's message by id, or by a start of its id that only one message there has. */
-  function dbFindChannelMessage(channel: string, idOrPrefix: string): Message | undefined {
-    const rows = db
-      .prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE channel = ? AND id LIKE ? ESCAPE '\\' LIMIT 2`)
-      .all(channel, `${idOrPrefix.replace(/[\\%_]/g, "\\$&")}%`) as Record<string, unknown>[];
+  /** A message by id, or by a start of its id that only one message has (within `channel`, if given). */
+  function dbFindMessage(idOrPrefix: string, channel?: string): Message | undefined {
+    const pattern = `${idOrPrefix.replace(/[\\%_]/g, "\\$&")}%`;
+    const rows = (
+      channel
+        ? db
+            .prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE channel = ? AND id LIKE ? ESCAPE '\\' LIMIT 2`)
+            .all(channel, pattern)
+        : db.prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id LIKE ? ESCAPE '\\' LIMIT 2`).all(pattern)
+    ) as Record<string, unknown>[];
     return rows.length === 1 ? parseMessageRow(rows[0]) : undefined;
   }
 
@@ -464,8 +464,7 @@ export function openProjectDB(dbPath: string) {
     dbGetUserChannels,
     dbSaveMessage,
     dbGetChannelMessages,
-    dbGetMessage,
-    dbFindChannelMessage,
+    dbFindMessage,
     dbEditMessage,
     dbRetractMessage,
     dbGetRecentMessages,

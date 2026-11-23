@@ -8,7 +8,7 @@ import type { Message, MessageImage } from "./types.js";
 export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, polling: Polling) {
   const { getUserRole, getUsersByRole, isUserRegistered } = auth;
   const { getChannelMembers, isChannelMember } = channels;
-  const { dbFindChannelMessage, dbGetChannel, dbSaveMessage } = db;
+  const { dbFindMessage, dbGetChannel, dbSaveMessage } = db;
   const { deliverMessage } = polling;
   const messageQueues = new Map<string, Message[]>();
 
@@ -49,7 +49,7 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
     // A reply names a message of the same channel, by id or a unique start of it
     let replyTo: string | undefined;
     if (replyToId) {
-      const parent = dbFindChannelMessage(channel, replyToId);
+      const parent = dbFindMessage(replyToId, channel);
       if (!parent) throw new Error(`No message "${replyToId}" in ${channel} to reply to`);
       replyTo = parent.replyTo ?? parent.id; // replies to a reply join the same thread
     }

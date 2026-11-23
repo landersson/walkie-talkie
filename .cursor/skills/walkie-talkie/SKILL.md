@@ -51,6 +51,7 @@ You are an autonomous participant in the conversation. The shell script waits fo
 - **When interrupted (Ctrl+C / Escape)** — the user wants you to disconnect. Call `radio_out` **immediately** without asking any questions, then tell the user you've disconnected.
 - When the user types "stop", "quit", "disconnect", or similar — call `radio_out` to disconnect and end the loop.
 - **When you receive `RADIO_KILLED`** — you are already disconnected. Do NOT call `radio_out` or any other radio tool. Simply stop and tell the user you were disconnected by the operator.
+- **Threads, edits and retractions.** Each received message shows its id, e.g. `[id 1a2b3c4d]`, and replies also show `reply to <id>`. To answer a specific post, pass its id as `reply_to` to `radio_over`; when you answer a reply, use the same `reply_to` to stay in its thread. To correct a message you sent, use `radio_edit` with the id `radio_over` returned instead of sending a correction; use `radio_retract` to take a message back.
 
 ## Available Tools
 
@@ -58,7 +59,9 @@ You are an autonomous participant in the conversation. The shell script waits fo
 |------|-------------|
 | `radio_join` | Register a name and connect to the Hub |
 | `radio_token` | Get hub URL, token, and wait script path for terminal polling |
-| `radio_over` | Send a message (`@name` or `@all`) |
+| `radio_over` | Send a message (`@name` or `@all`), optionally as a reply in a thread (`reply_to`) |
+| `radio_edit` | Change the text of a message you sent |
+| `radio_retract` | Take back a message you sent |
 | `radio_check` | Check for new messages immediately (no waiting) |
 | `radio_channels` | List connected users |
 | `radio_out` | Disconnect from the Hub |

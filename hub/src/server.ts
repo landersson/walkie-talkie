@@ -133,8 +133,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     dbGetAgentConfig,
     dbGetChannel,
     dbGetChannelMessages,
-    dbGetMessage,
-    dbFindChannelMessage,
+    dbFindMessage,
     dbEditMessage,
     dbRetractMessage,
     dbGetRecentMessages,
@@ -295,10 +294,8 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     if (!retract && (typeof body.content !== "string" || !body.content.trim())) {
       return sendError(res, 400, "Missing or invalid 'content' field");
     }
-    const message =
-      typeof body.channel === "string" && body.channel
-        ? dbFindChannelMessage(channelName(body.channel), body.id)
-        : dbGetMessage(body.id);
+    const channel = typeof body.channel === "string" && body.channel ? channelName(body.channel) : undefined;
+    const message = dbFindMessage(body.id, channel);
     if (!message) return sendError(res, 404, `No message "${body.id}"`);
     if (message.from !== caller) return sendError(res, 403, "You can only change your own messages");
     if (message.retracted) return sendError(res, 409, "That message was retracted");
