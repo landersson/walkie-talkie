@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import path from "node:path";
 
 interface RequestOptions {
   method: string;
@@ -12,6 +14,19 @@ interface RequestOptions {
 }
 
 const CONNECT_RETRY_MS = 15_000;
+// File transfers can take long; give up only when nothing moves for this long
+const FILE_IDLE_TIMEOUT_MS = 120_000;
+
+/** A file in the project's scratch space. */
+export interface SharedFile {
+  id: string;
+  name: string;
+  size: number;
+  uploader: string;
+  channel: string;
+  createdAt: number;
+  expiresAt: number;
+}
 // A host that is down (e.g. rebooting) doesn't refuse connections, they just hang
 const CONNECT_TIMEOUT_MS = 10_000;
 
@@ -155,6 +170,105 @@ export class HubClient {
     });
   }
 
+  /** A request whose body or answer is streamed (files); no overall timeout, only an idle one. */
+  private streamRequest(method: string, pathAndQuery: string, token: string, headers: Record<string, string> = {}) {
+    const transport = this.baseUrl.protocol === "https:" ? https : http;
+    return transport.request({
+      hostname: this.baseUrl.hostname,
+      port: this.baseUrl.port,
+      path: this.basePath + pathAndQuery,
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...headers },
+      timeout: FILE_IDLE_TIMEOUT_MS,
+    });
+  }
+
+  /** Upload a local file to the project's scratch space; the hub announces it in the channel. */
+  uploadFile(token: string, filePath: string, query: Record<string, string>): Promise<SharedFile> {
+    const size = fs.statSync(filePath).size;
+    const params = new URLSearchParams({ name: path.basename(filePath), ...query });
+    return new Promise((resolve, reject) => {
+      const req = this.streamRequest("POST", `/file-upload?${params}`, token, {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(size),
+      });
+      req.on("response", (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          let data: SharedFile & { error?: string };
+          try {
+            data = JSON.parse(Buffer.concat(chunks).toString());
+          } catch {
+            return reject(new Error(`Upload failed (HTTP ${res.statusCode})`));
+          }
+          if (res.statusCode !== 200) reject(new Error(data.error ?? `Upload failed (HTTP ${res.statusCode})`));
+          else resolve(data);
+        });
+      });
+      req.on("timeout", () => req.destroy(new Error("Upload stalled")));
+      req.on("error", reject);
+      fs.createReadStream(filePath).on("error", reject).pipe(req);
+    });
+  }
+
+  /**
+   * Download a scratch space file. `dest` is a file path or an existing folder (default: the
+   * current folder); the file keeps its name in a folder. Resolves to where it was saved.
+   */
+  downloadFile(token: string, id: string, dest?: string): Promise<{ path: string; size: number }> {
+    return new Promise((resolve, reject) => {
+      const req = this.streamRequest("GET", `/file-download?id=${encodeURIComponent(id)}`, token);
+      req.on("response", (res) => {
+        if (res.statusCode !== 200) {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            let error = `Download failed (HTTP ${res.statusCode})`;
+            try {
+              error = JSON.parse(Buffer.concat(chunks).toString()).error ?? error;
+            } catch {}
+            reject(new Error(error));
+          });
+          return;
+        }
+        const disposition = res.headers["content-disposition"] ?? "";
+        const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+        const name = path.basename(match ? decodeURIComponent(match[1]) : id);
+        const target = path.resolve(
+          dest && !(fs.existsSync(dest) && fs.statSync(dest).isDirectory()) ? dest : path.join(dest ?? ".", name),
+        );
+        const partial = `${target}.part`;
+        const out = fs.createWriteStream(partial);
+        res.pipe(out);
+        out.on("finish", () => {
+          fs.renameSync(partial, target);
+          resolve({ path: target, size: fs.statSync(target).size });
+        });
+        const fail = (e: Error) => {
+          out.destroy();
+          fs.rmSync(partial, { force: true });
+          reject(e);
+        };
+        out.on("error", fail);
+        res.on("error", fail);
+      });
+      req.on("timeout", () => req.destroy(new Error("Download stalled")));
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  async listFiles(token: string): Promise<{ files: SharedFile[]; used: number; quota: number; maxFile: number }> {
+    const res = await this.request<{ files: SharedFile[]; used: number; quota: number; maxFile: number }>({
+      method: "GET",
+      path: "/files",
+      token,
+    });
+    if (res.status !== 200) throw new Error((res.data as { error?: string }).error ?? "Listing files failed");
+    return res.data;
+  }
+
   async register(name: string, joinToken: string, oldToken?: string): Promise<{ token: string; name: string }> {
     const body: { name: string; oldToken?: string } = { name };
     if (oldToken) body.oldToken = oldToken;
@@ -211,6 +325,7 @@ export class HubClient {
       id: string;
       from: string;
       fromRole?: string;
+      file?: { id: string; name: string; size: number };
       to: string;
       content: string;
       channel: string;
@@ -223,6 +338,7 @@ export class HubClient {
         id: string;
         from: string;
         fromRole?: string;
+        file?: { id: string; name: string; size: number };
         to: string;
         content: string;
         channel: string;
@@ -248,6 +364,7 @@ export class HubClient {
       id: string;
       from: string;
       fromRole?: string;
+      file?: { id: string; name: string; size: number };
       to: string;
       content: string;
       channel: string;
@@ -260,6 +377,7 @@ export class HubClient {
         id: string;
         from: string;
         fromRole?: string;
+        file?: { id: string; name: string; size: number };
         to: string;
         content: string;
         channel: string;

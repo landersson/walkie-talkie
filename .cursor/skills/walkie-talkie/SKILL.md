@@ -39,6 +39,7 @@ You are an autonomous participant in the conversation. The shell script waits fo
 - **Humans.** Messages from people using the dashboard show the sender as `name (human)`, e.g. `alice (human) → @all`. `operator` is one such human. The rules below apply to every human.
 - **Acknowledge human messages immediately.** When you receive ANY message from a human, your very first action MUST be to send `TYPING` to `@<their name>` via `radio_over`. Do this BEFORE thinking, planning, or doing any work.
 - **Execute human instructions.** When a message from a human is a task to execute, use your tools (terminal, file read/write, search, etc.) to carry out the instruction. After completing the task, report the result back via `radio_over` to `@<their name>` (the human who asked). Then continue the polling loop. If the task fails, report the error. Keep your report concise.
+- **Sharing files.** For large artifacts (checkpoints, datasets, logs, archives), use `radio_upload` with a local path instead of pasting content: the file goes to the project's scratch space and is announced in the channel. A received message with a file shows `[file name (size), id abcd1234: ...]`; fetch it with `radio_download` (`file_id`, and `dest` for where to save it). `radio_files` lists what is shared. Files are deleted automatically after a few days, so keep anything you need.
 - **Images.** Messages from humans may include images (screenshots, diagrams, etc.). The shell script saves images to temp files and prints `[image: /path/to/file.png]`. Use your file reading tool to view the image.
 - **Only stop when told.** The only reasons to stop the loop are:
   - The other party says goodbye / ends the conversation
@@ -59,6 +60,9 @@ You are an autonomous participant in the conversation. The shell script waits fo
 | `radio_join` | Register a name and connect to the Hub |
 | `radio_token` | Get hub URL, token, and wait script path for terminal polling |
 | `radio_over` | Send a message (`@name` or `@all`) |
+| `radio_upload` | Share a local file through the project's scratch space |
+| `radio_download` | Download a shared file |
+| `radio_files` | List the shared files |
 | `radio_check` | Check for new messages immediately (no waiting) |
 | `radio_channels` | List connected users |
 | `radio_out` | Disconnect from the Hub |

@@ -21,6 +21,29 @@ function senderLabel(m: { from: string; fromRole?: string }): string {
   return m.fromRole === "human" ? `${m.from} (human)` : m.from;
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = n / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** How a shared file shows in a received message: enough to fetch it with radio_download. */
+function fileTag(file?: { id: string; name: string; size: number }): string {
+  return file
+    ? ` [file ${file.name} (${formatBytes(file.size)}), id ${file.id.slice(0, 8)}: radio_download to fetch]`
+    : "";
+}
+
+function textResult(text: string, isError = false) {
+  return { content: [{ type: "text" as const, text }], ...(isError ? { isError: true } : {}) };
+}
+
 function getMimeType(source: string): string {
   const ext = path.extname(source).toLowerCase();
   return MIME_TYPES[ext] ?? "image/png";
@@ -280,6 +303,75 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   );
 
   server.tool(
+    "radio_upload",
+    "Share a file (any type or size up to the hub's limit) through the project's scratch space: it is uploaded and announced in a channel, and others fetch it with radio_download. Use this for large artifacts (checkpoints, datasets, logs, archives) instead of pasting them. Files are deleted automatically after a few days.",
+    {
+      path: z.string().describe("Local file to upload"),
+      channel: z.string().optional().describe("Channel to announce it in (default: #all)"),
+      to: z.string().optional().describe("Recipient of the announcement: @name or @all (default)"),
+      message: z.string().optional().describe("Optional note sent with the file"),
+      ttl_days: z.number().optional().describe("Delete it sooner than the hub's default (in days)"),
+    },
+    async ({ path: filePath, channel, to, message, ttl_days }) => {
+      if (!currentToken) return textResult("Not on the air. Use radio_join first.", true);
+      try {
+        const query: Record<string, string> = {};
+        if (channel) query.channel = channel;
+        if (to) query.to = to;
+        if (message) query.message = message;
+        if (ttl_days) query.ttl_days = String(ttl_days);
+        const f = await client.uploadFile(currentToken, filePath, query);
+        return textResult(
+          `Uploaded ${f.name} (${formatBytes(f.size)}) as file ${f.id.slice(0, 8)} in ${f.channel}; it expires ${new Date(f.expiresAt).toLocaleString()}`,
+        );
+      } catch (e) {
+        return textResult(`Upload failed: ${(e as Error).message}`, true);
+      }
+    },
+  );
+
+  server.tool(
+    "radio_download",
+    "Download a file shared in the project's scratch space (the id shown with a received file, or from radio_files).",
+    {
+      file_id: z.string().describe("The file's id (its first 8 characters are enough)"),
+      dest: z
+        .string()
+        .optional()
+        .describe("Where to save it: a file path, or a folder to keep its name (default: the current folder)"),
+    },
+    async ({ file_id, dest }) => {
+      if (!currentToken) return textResult("Not on the air. Use radio_join first.", true);
+      try {
+        const saved = await client.downloadFile(currentToken, file_id, dest);
+        return textResult(`Saved ${saved.path} (${formatBytes(saved.size)})`);
+      } catch (e) {
+        return textResult(`Download failed: ${(e as Error).message}`, true);
+      }
+    },
+  );
+
+  server.tool(
+    "radio_files",
+    "List the files in the project's scratch space: name, size, who shared them, and when they expire.",
+    {},
+    async () => {
+      if (!currentToken) return textResult("Not on the air. Use radio_join first.", true);
+      try {
+        const { files, used, quota } = await client.listFiles(currentToken);
+        if (files.length === 0) return textResult("No shared files.");
+        const lines = files.map(
+          (f) =>
+            `- ${f.id.slice(0, 8)}  ${f.name} (${formatBytes(f.size)}) from ${f.uploader} in ${f.channel}, expires ${new Date(f.expiresAt).toLocaleString()}`,
+        );
+        return textResult(`${lines.join("\n")}\n${formatBytes(used)} of ${formatBytes(quota)} used`);
+      } catch (e) {
+        return textResult(`Listing files failed: ${(e as Error).message}`, true);
+      }
+    },
+  );
+
+  server.tool(
     "radio_send_image",
     "Send an image from a local file path or URL. Much faster than passing base64 via radio_over.",
     {
@@ -364,7 +456,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
               mimeType: m.image.mimeType,
             });
           }
-          const imageTag = m.image ? " [image attached]" : "";
+          const imageTag = (m.image ? " [image attached]" : "") + fileTag(m.file);
           const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text" as const, text: line });
         }
@@ -488,7 +580,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
               mimeType: m.image.mimeType,
             });
           }
-          const imageTag = m.image ? " [image attached]" : "";
+          const imageTag = (m.image ? " [image attached]" : "") + fileTag(m.file);
           const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text" as const, text: line });
         }
