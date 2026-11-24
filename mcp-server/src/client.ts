@@ -229,8 +229,9 @@ export class HubClient {
   }
 
   /**
-   * Download a scratch space file. `dest` is a file path or an existing folder (default: the
-   * current folder); the file keeps its name in a folder. Resolves to where it was saved.
+   * Download a scratch space file. `dest` is a file path, or a folder (an existing one, or a path
+   * ending in "/"; default: the current folder) where the file keeps its name. Missing parent
+   * folders are created. Resolves to where it was saved.
    */
   downloadFile(token: string, id: string, dest?: string): Promise<{ path: string; size: number }> {
     return new Promise((resolve, reject) => {
@@ -251,9 +252,16 @@ export class HubClient {
         const disposition = res.headers["content-disposition"] ?? "";
         const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
         const name = path.basename(match ? decodeURIComponent(match[1]) : id);
-        const target = path.resolve(
-          dest && !(fs.existsSync(dest) && fs.statSync(dest).isDirectory()) ? dest : path.join(dest ?? ".", name),
-        );
+        // A folder is an existing directory or a path ending in a separator; create it if missing.
+        const isFolder = !dest || /[\\/]$/.test(dest) || (fs.existsSync(dest) && fs.statSync(dest).isDirectory());
+        const target = path.resolve(isFolder ? path.join(dest ?? ".", name) : dest);
+        try {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+        } catch (e) {
+          res.resume();
+          reject(e);
+          return;
+        }
         const partial = `${target}.part`;
         const out = fs.createWriteStream(partial);
         res.pipe(out);

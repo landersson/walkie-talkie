@@ -381,7 +381,9 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       dest: z
         .string()
         .optional()
-        .describe("Where to save it: a file path, or a folder to keep its name (default: the current folder)"),
+        .describe(
+          "Where to save it: a file path, or a folder (existing, or ending in /) to keep its name (default: the current folder). Missing folders are created.",
+        ),
     },
     async ({ file_id, dest }) => {
       if (!currentToken) return textResult("Not on the air. Use radio_join first.", true);
