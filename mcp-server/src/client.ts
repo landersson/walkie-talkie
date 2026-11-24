@@ -43,6 +43,22 @@ export interface SharedFile {
   createdAt: number;
   expiresAt: number;
 }
+/** A message as the hub's channel history returns it. */
+export interface HistoryMessage {
+  id: string;
+  from: string;
+  fromRole?: string;
+  to: string;
+  content: string;
+  channel: string;
+  timestamp: number;
+  replyTo?: string;
+  editedAt?: number;
+  retracted?: boolean;
+  image?: unknown;
+  file?: { id: string; name: string; size: number };
+}
+
 // A host that is down (e.g. rebooting) doesn't refuse connections, they just hang
 const CONNECT_TIMEOUT_MS = 10_000;
 
@@ -291,6 +307,17 @@ export class HubClient {
     });
     if (res.status !== 200) throw new Error((res.data as { error?: string }).error ?? "Listing files failed");
     return res.data;
+  }
+
+  /** The latest `limit` messages of a channel the agent is in, oldest first. */
+  async channelHistory(token: string, channel: string, limit: number): Promise<HistoryMessage[]> {
+    const res = await this.request<{ messages: HistoryMessage[] }>({
+      method: "GET",
+      path: `/channel-history?${new URLSearchParams({ channel, limit: String(limit) })}`,
+      token,
+    });
+    if (res.status !== 200) throw new Error((res.data as { error?: string }).error ?? "Reading history failed");
+    return res.data.messages;
   }
 
   async register(name: string, joinToken: string, oldToken?: string): Promise<{ token: string; name: string }> {

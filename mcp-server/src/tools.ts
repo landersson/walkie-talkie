@@ -48,23 +48,27 @@ function textResult(text: string, isError = false) {
 const SHORT_ID = 8;
 
 /** One received message as a line for the agent, e.g. "[10:02:03] #dev alice (human) → @all [id 1a2b3c4d]: hi" */
-function messageLine(m: {
-  id?: string;
-  from: string;
-  fromRole?: string;
-  to: string;
-  content: string;
-  channel?: string;
-  timestamp: number;
-  image?: unknown;
-  file?: { id: string; name: string; size: number };
-  replyTo?: string;
-}): string {
+function messageLine(
+  m: {
+    id?: string;
+    from: string;
+    fromRole?: string;
+    to: string;
+    content: string;
+    channel?: string;
+    timestamp: number;
+    image?: unknown;
+    file?: { id: string; name: string; size: number };
+    replyTo?: string;
+  },
+  withDate = false,
+): string {
   const ids = m.id
     ? ` [id ${m.id.slice(0, SHORT_ID)}${m.replyTo ? `, reply to ${m.replyTo.slice(0, SHORT_ID)}` : ""}]`
     : "";
   const attached = (m.image ? " [image attached]" : "") + fileTag(m.file);
-  return `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}${ids}: ${m.content}${attached}`;
+  const when = withDate ? new Date(m.timestamp).toLocaleString() : new Date(m.timestamp).toLocaleTimeString();
+  return `[${when}] ${m.channel || "#all"} ${senderLabel(m)} → ${m.to}${ids}: ${m.content}${attached}`;
 }
 
 function getMimeType(source: string): string {
@@ -412,6 +416,34 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         return textResult(`${lines.join("\n")}\n${formatBytes(used)} of ${formatBytes(quota)} used`);
       } catch (e) {
         return textResult(`Listing files failed: ${(e as Error).message}`, true);
+      }
+    },
+  );
+
+  server.tool(
+    "radio_history",
+    "Read back the latest messages of a channel you are in, oldest first, e.g. to see what was said before you joined or while you were away.",
+    {
+      channel: z.string().optional().describe("Channel to read (default: #all)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("How many of the latest messages (default 20, max 100)"),
+    },
+    async ({ channel, limit }) => {
+      if (!currentToken) return textResult("Not on the air. Use radio_join first.", true);
+      try {
+        const messages = await client.channelHistory(currentToken, channel || "#all", limit ?? 20);
+        if (messages.length === 0) return textResult("No messages yet.");
+        const lines = messages
+          .map((m) => (m.retracted ? { ...m, content: "[retracted]" } : m))
+          .map((m) => messageLine(m, true));
+        return textResult(lines.join("\n"));
+      } catch (e) {
+        return textResult(`Reading history failed: ${(e as Error).message}`, true);
       }
     },
   );

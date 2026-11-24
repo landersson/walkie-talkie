@@ -23,6 +23,11 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
     return new Map([...messageQueues].filter(([, q]) => q.length > 0).map(([n, q]) => [n, [...q]]));
   }
 
+  /** Messages waiting for `name`, oldest first (a copy). */
+  function getQueue(name: string): Message[] {
+    return [...(messageQueues.get(name) ?? [])];
+  }
+
   function removeQueue(name: string): void {
     messageQueues.delete(name);
   }
@@ -144,6 +149,7 @@ export function createRouter(db: ProjectDB, auth: Auth, channels: Channels, poll
   return {
     ensureQueue,
     getAllQueues,
+    getQueue,
     removeQueue,
     drainQueue,
     routeMessage,

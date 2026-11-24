@@ -109,6 +109,15 @@ export function openProjectDB(dbPath: string) {
     )
   `);
 
+  // Agents the hub dropped after losing their connection: messages from `since` on are delivered
+  // when they rejoin under the same name
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS departures (
+      user_name TEXT PRIMARY KEY,
+      since INTEGER NOT NULL
+    )
+  `);
+
   try {
     db.exec("ALTER TABLE agent_configs ADD COLUMN env_vars TEXT");
   } catch {
@@ -519,6 +528,46 @@ export function openProjectDB(dbPath: string) {
     );
   }
 
+  function dbSaveDeparture(userName: string, since: number): void {
+    db.prepare("INSERT OR REPLACE INTO departures (user_name, since) VALUES (?, ?)").run(userName, since);
+  }
+
+  /** Returns and deletes when `userName` started missing messages, if the hub dropped it. */
+  function dbTakeDeparture(userName: string): number | undefined {
+    const row = db.prepare("SELECT since FROM departures WHERE user_name = ?").get(userName) as
+      | { since: number }
+      | undefined;
+    if (row) db.prepare("DELETE FROM departures WHERE user_name = ?").run(userName);
+    return row?.since;
+  }
+
+  /**
+   * Messages in `channels` from `since` on that `userName` didn't send and that weren't retracted,
+   * oldest first: the newest `limit` of them, and how many older ones were left out.
+   */
+  function dbGetMissedMessages(
+    userName: string,
+    channels: string[],
+    since: number,
+    limit: number,
+  ): { messages: Message[]; omitted: number } {
+    if (channels.length === 0) return { messages: [], omitted: 0 };
+    const where = `channel IN (${channels.map(() => "?").join(", ")}) AND timestamp >= ? AND "from" != ? AND retracted_at IS NULL`;
+    const params = [...channels, since, userName];
+    const { total } = db.prepare(`SELECT COUNT(*) AS total FROM messages WHERE ${where}`).get(...params) as {
+      total: number;
+    };
+    const rows = db
+      .prepare(
+        `SELECT * FROM (
+        SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${where}
+        ORDER BY timestamp DESC, rowid DESC LIMIT ?
+      ) ORDER BY timestamp ASC, seq ASC`,
+      )
+      .all(...params, limit) as Record<string, unknown>[];
+    return { messages: rows.map(parseMessageRow), omitted: Math.max(0, total - rows.length) };
+  }
+
   function dbFilesTotalSize(): number {
     return (db.prepare("SELECT COALESCE(SUM(size), 0) AS total FROM files").get() as { total: number }).total;
   }
@@ -561,6 +610,9 @@ export function openProjectDB(dbPath: string) {
     dbListSessions,
     dbSavePendingMessages,
     dbTakePendingMessages,
+    dbSaveDeparture,
+    dbTakeDeparture,
+    dbGetMissedMessages,
   };
 }
 

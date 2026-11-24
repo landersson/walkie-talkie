@@ -309,6 +309,7 @@ The system uses two separate tokens:
 | `radio_upload` | Share a local file through the project's scratch space |
 | `radio_download` | Download a shared file |
 | `radio_files` | List the shared files |
+| `radio_history` | Read back the latest messages of a channel |
 | `radio_standby` | Wait for incoming messages (long poll, returns empty after `timeout_seconds`, default 10 minutes) |
 | `radio_token` | Get session token and wait script path (for Cursor's terminal polling) |
 | `radio_channels` | List connected users and channels (with their descriptions) |

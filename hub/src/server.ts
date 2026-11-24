@@ -136,6 +136,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     ensureChannelMembership,
     getChannelMemberCounts,
     getChannelMembers,
+    getUserChannels,
     isChannelMember,
     joinChannel,
     leaveChannel,
@@ -163,6 +164,9 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
     dbListSessions,
     dbSavePendingMessages,
     dbSetChannelDescription,
+    dbGetMissedMessages,
+    dbSaveDeparture,
+    dbTakeDeparture,
     dbTakePendingMessages,
     dbUpdateAgentConfig,
     dbUpdateReadCursor,
@@ -170,8 +174,16 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   const { addSSEClient, broadcast } = project.events;
   const { addPoll, closeAllPolls, hasPendingPoll, isOnline, onPollDisconnect, removePoll, setOffline, setOnline } =
     project.polling;
-  const { drainQueue, enqueueAndDeliver, ensureQueue, getAllQueues, notifyBridges, removeQueue, routeMessage } =
-    project.router;
+  const {
+    drainQueue,
+    enqueueAndDeliver,
+    ensureQueue,
+    getAllQueues,
+    getQueue,
+    notifyBridges,
+    removeQueue,
+    routeMessage,
+  } = project.router;
 
   // Open dashboard event streams per human; a human is online while at least one is open
   const humanConnections = new Map<string, number>();
@@ -229,6 +241,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
         if (!body.oldToken || body.oldToken !== existingToken) {
           return sendError(res, 409, nameTakenMessage(body.name));
         }
+        recordDeparture(body.name);
         removePoll(body.name);
         removeQueue(body.name);
         unregisterUser(body.name);
@@ -269,6 +282,7 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
 
       if (role === "agent") {
         notifyBridges(`USER_JOINED: ${body.name}`);
+        deliverMissedMessages(body.name);
       } else if (role === "bridge") {
         // Send current agent list to the newly connected bridge (even if empty)
         const agents = getRegisteredUsers().filter((n) => n !== body.name && getUserRole(n) === "agent");
@@ -604,15 +618,19 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
 
   const handleChannelHistory: RouteHandler = async (req, res, userName) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-    const channel = url.searchParams.get("channel");
-    if (!channel) {
+    const param = url.searchParams.get("channel");
+    if (!param) {
       return sendError(res, 400, "Missing 'channel' query parameter");
     }
+    const channel = channelName(param);
     if (!isChannelMember(channel, userName!)) {
       return sendError(res, 403, `You are not a member of ${channel}`);
     }
     const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 1), 200);
-    const messages = dbGetChannelMessages(channel, limit);
+    const messages = dbGetChannelMessages(channel, limit).map((m) => ({
+      ...m,
+      fromRole: getUserRole(m.from) ?? undefined,
+    }));
     sendJson(res, 200, { messages });
   };
 
@@ -1038,6 +1056,10 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   };
 
   const STALE_GRACE_MS = 30_000; // 30 seconds before auto-unregister
+  // An agent the hub dropped gets the messages it missed when it rejoins: at most this many,
+  // and only if it was gone for less than a week
+  const CATCH_UP_LIMIT = 100;
+  const CATCH_UP_MAX_AGE_MS = 7 * 24 * 3_600_000;
   // Agents not waiting in a poll and silent for this long are assumed gone (busy agents make no
   // requests while they work, so this is long)
   const IDLE_EXPIRY_MS = 24 * 3_600_000;
@@ -1048,8 +1070,43 @@ function createProjectApp(project: Project, adminToken: string, joinToken: strin
   // Last authenticated request per agent/bridge
   const lastSeen = new Map<string, number>();
 
+  /**
+   * Remember that the hub is dropping agent `userName` without it signing off, so it can catch up
+   * when it rejoins: from its oldest undelivered message, or from now if it has none (it got
+   * everything sent while it was still registered).
+   */
+  function recordDeparture(userName: string): void {
+    if (getUserRole(userName) !== "agent") return;
+    const queued = getQueue(userName).filter((m) => m.from !== "system");
+    dbSaveDeparture(userName, Math.min(Date.now(), ...queued.map((m) => m.timestamp)));
+  }
+
+  /** Queue the messages a rejoining agent missed since the hub dropped it, after a note saying so. */
+  function deliverMissedMessages(userName: string): void {
+    const since = dbTakeDeparture(userName);
+    if (since === undefined || Date.now() - since > CATCH_UP_MAX_AGE_MS) return;
+    const channels = getUserChannels(userName);
+    const { messages, omitted } = dbGetMissedMessages(userName, channels, since, CATCH_UP_LIMIT);
+    if (messages.length === 0) return;
+    const inChannels = [...new Set(messages.map((m) => m.channel))].join(", ");
+    const left = omitted > 0 ? ` The ${omitted} older ones are left out.` : "";
+    enqueueAndDeliver(userName, {
+      id: randomUUID(),
+      from: "system",
+      to: userName,
+      content: `CATCH_UP: You were off the air from ${new Date(since).toLocaleString()} until you rejoined. Here are the ${messages.length} messages sent meanwhile in ${inChannels}, oldest first.${left} Read them before you continue; reply to any that need an answer.`,
+      channel: "#all",
+      timestamp: Date.now(),
+    });
+    for (const message of messages) {
+      enqueueAndDeliver(userName, { ...message, fromRole: getUserRole(message.from) ?? undefined });
+    }
+    console.log(`[catch-up] ${userName}: ${messages.length} messages${omitted ? ` (${omitted} left out)` : ""}`);
+  }
+
   function removeStaleUser(userName: string, reason: string): void {
     const role = getUserRole(userName);
+    recordDeparture(userName);
     removePoll(userName);
     removeQueue(userName);
     setOffline(userName);
