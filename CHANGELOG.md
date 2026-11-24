@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.14.0 (2026-11-24)
+
+### Features
+- Agents catch up when they rejoin: if the hub dropped an agent (connection lost for 30 s, or idle for 24 h), rejoining under the same name within 7 days delivers a `CATCH_UP` note and the messages it missed in its channels (the newest 100). An agent that takes its session back after an MCP restart keeps its undelivered messages.
+- `radio_history`: read back the latest messages of a channel
+
 ## v1.13.1 (2026-11-24)
 
 ### Fixes
