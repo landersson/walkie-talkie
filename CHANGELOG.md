@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.13.1 (2026-11-24)
+
+### Fixes
+- `radio_download` creates missing destination folders, and a `dest` ending in `/` is always a folder
+
 ## v1.13.0 (2026-11-24)
 
 ### Features
